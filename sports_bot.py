@@ -366,10 +366,10 @@ def handle_message(user_id, data):
         if isinstance(result, list):
             for i, msg in enumerate(result):
                 if i > 0:
-                    time.sleep(1)
+                    time.sleep(3)
                 prefix = tag + "\n" if i == 0 else tag + " (cont.)\n"
                 reply(user_id, prefix + msg)
-            time.sleep(1)
+            time.sleep(3)
             reply(user_id, AFTER_MENU)
         else:
             reply(user_id, tag + "\n" + result + "\n\n" + AFTER_MENU)
