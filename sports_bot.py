@@ -54,7 +54,7 @@ AFTER_MENU = (
 
 
 # -- Messaging -----------------------------------------------------------------
-MSG_LIMIT = 900
+MSG_LIMIT = 155
 
 def send_group(text):
     for attempt in range(2):
@@ -359,20 +359,20 @@ def handle_message(user_id, data):
         if t.is_alive():
             reply(user_id, "Still loading...")
             t.join(timeout=15)
-        result = result_holder[0] or "Could not load data. Try again."
+        result    = result_holder[0] or ["Could not load data. Try again."]
         s["step"] = "AGAIN"
         uname     = s.get("name", "Someone")
         tag       = "[" + uname + "]"
-        if isinstance(result, list):
-            for i, msg in enumerate(result):
-                if i > 0:
-                    time.sleep(3)
-                prefix = tag + "\n" if i == 0 else tag + " (cont.)\n"
-                reply(user_id, prefix + msg)
-            time.sleep(3)
-            reply(user_id, AFTER_MENU)
-        else:
-            reply(user_id, tag + "\n" + result + "\n\n" + AFTER_MENU)
+        # First message gets the name tag
+        for i, msg in enumerate(result):
+            if i > 0:
+                time.sleep(2)
+            if i == 0:
+                reply(user_id, tag + " " + msg)
+            else:
+                reply(user_id, msg)
+        time.sleep(2)
+        reply(user_id, AFTER_MENU)
 
     # STEP 4: After results ----------------------------------------------------
     elif step == "AGAIN":
