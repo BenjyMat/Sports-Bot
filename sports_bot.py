@@ -15,6 +15,12 @@ BOT_ID       = os.environ.get("GROUPME_BOT_ID",       "YOUR_BOT_ID_HERE")
 ACCESS_TOKEN = os.environ.get("GROUPME_ACCESS_TOKEN", "YOUR_TOKEN_HERE")
 
 sessions = {}
+bans = {}  # { user_id: ban_expiry_timestamp }
+
+# -- Prank config --------------------------------------------------------------
+import time
+PRANK_USER = "18483671827"  # Shimshy's number (E.164 format)
+PRANK_ASKED = set()  # track if we've asked him the question
 
 LEAGUES    = {"1": "nhl", "2": "nba", "3": "nfl", "4": "mlb",
               "nhl": "nhl", "nba": "nba", "nfl": "nfl", "mlb": "mlb"}
@@ -83,10 +89,7 @@ def send_group(text):
 
 
 def reply(user_id, text):
-    if ACCESS_TOKEN and ACCESS_TOKEN != "YOUR_TOKEN_HERE":
-        send_dm(user_id, text)
-    else:
-        send_group(text)
+    send_group(text)
 
 
 # -- Session helpers -----------------------------------------------------------
@@ -133,6 +136,41 @@ def groupme_webhook():
         return jsonify({}), 200
 
     tl = text.lower()
+
+    # -- Ban check -------------------------------------------------------------
+    if user_id in bans:
+        if time.time() < bans[user_id]:
+            mins_left = int((bans[user_id] - time.time()) / 60) + 1
+            reply(user_id, "You are banned for " + str(mins_left) + " more minute(s).\nKnicks fan.")
+            return jsonify({}), 200
+        else:
+            del bans[user_id]  # ban expired
+
+    # -- Prank for Shimshy -----------------------------------------------------
+    phone = data.get("sender_id", data.get("user_id", ""))
+    normalized = phone.replace("+", "").replace("-", "").replace(" ", "")
+    if PRANK_USER in normalized or normalized in PRANK_USER:
+        if user_id not in PRANK_ASKED:
+            PRANK_ASKED.add(user_id)
+            reply(user_id, "Before you can use Sports Bot\nyou must answer one question:\n\nWho is better,\nthe Lakers or the Knicks?")
+            return jsonify({}), 200
+        elif user_id in PRANK_ASKED and tl not in ("lakers", "la lakers", "los angeles lakers"):
+            if any(x in tl for x in ("knicks", "new york", "ny")):
+                bans[user_id] = time.time() + 3600  # 1 hour ban
+                PRANK_ASKED.discard(user_id)
+                reply(user_id, "WRONG.\n\nYou have been banned\nfor 1 hour.\n\nShame on you.")
+                return jsonify({}), 200
+            elif any(x in tl for x in ("lakers", "la lakers", "los angeles lakers")):
+                PRANK_ASKED.discard(user_id)
+                reply(user_id, "Correct! Good taste.\nWelcome to Sports Bot!\n\n" + WELCOME)
+                return jsonify({}), 200
+            else:
+                reply(user_id, "Just answer the question:\nLakers or Knicks?")
+                return jsonify({}), 200
+        elif any(x in tl for x in ("lakers", "la lakers", "los angeles lakers")):
+            PRANK_ASKED.discard(user_id)
+            reply(user_id, "Correct! Good taste.\nWelcome to Sports Bot!\n\n" + WELCOME)
+            return jsonify({}), 200
 
     if tl in ("menu", "restart", "reset", "start", "hi", "hello"):
         reset(user_id)
