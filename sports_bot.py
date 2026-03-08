@@ -8,6 +8,7 @@ from flask import Flask, request, jsonify
 import os
 import requests
 import espn
+import threading
 
 app = Flask(__name__)
 
@@ -135,6 +136,16 @@ def groupme_webhook():
     if sender_type == "bot" or not text:
         return jsonify({}), 200
 
+    # Respond to GroupMe instantly so it never retries/duplicates
+    # Process everything in background thread
+    def process():
+        handle_message(user_id, data)
+    threading.Thread(target=process, daemon=True).start()
+    return jsonify({}), 200
+
+
+def handle_message(user_id, data):
+    text = data.get("text", "").strip()
     tl   = text.lower()
     name = data.get("name", "Someone")
 
@@ -148,7 +159,7 @@ def groupme_webhook():
         if time.time() < bans[user_id]:
             mins_left = int((bans[user_id] - time.time()) / 60) + 1
             reply(user_id, "You are banned for " + str(mins_left) + " more minute(s).\nKnicks fan.")
-            return jsonify({}), 200
+            return
         else:
             del bans[user_id]  # ban expired
 
@@ -159,29 +170,29 @@ def groupme_webhook():
         if user_id not in PRANK_ASKED:
             PRANK_ASKED.add(user_id)
             reply(user_id, "Before you can use Sports Bot\nyou must answer one question:\n\nWho is better,\nthe Lakers or the Knicks?")
-            return jsonify({}), 200
+            return
         elif user_id in PRANK_ASKED and tl not in ("lakers", "la lakers", "los angeles lakers"):
             if any(x in tl for x in ("knicks", "new york", "ny")):
                 bans[user_id] = time.time() + 3600  # 1 hour ban
                 PRANK_ASKED.discard(user_id)
                 reply(user_id, "WRONG.\n\nYou have been banned\nfor 1 hour.\n\nShame on you.")
-                return jsonify({}), 200
+                return
             elif any(x in tl for x in ("lakers", "la lakers", "los angeles lakers")):
                 PRANK_ASKED.discard(user_id)
                 reply(user_id, "Correct! Good taste.\nWelcome to Sports Bot!\n\n" + WELCOME)
-                return jsonify({}), 200
+                return
             else:
                 reply(user_id, "Just answer the question:\nLakers or Knicks?")
-                return jsonify({}), 200
+                return
         elif any(x in tl for x in ("lakers", "la lakers", "los angeles lakers")):
             PRANK_ASKED.discard(user_id)
             reply(user_id, "Correct! Good taste.\nWelcome to Sports Bot!\n\n" + WELCOME)
-            return jsonify({}), 200
+            return
 
     if tl in ("menu", "restart", "reset", "start", "hi", "hello"):
         reset(user_id)
         reply(user_id, WELCOME)
-        return jsonify({}), 200
+        return
 
     if tl == "help":
         reply(user_id, (
@@ -193,7 +204,7 @@ def groupme_webhook():
             "Replies are private -\n"
             "only YOU see them!"
         ))
-        return jsonify({}), 200
+        return
 
     s    = session(user_id)
     step = s.get("step", "LEAGUE")
@@ -203,14 +214,14 @@ def groupme_webhook():
         league = LEAGUES.get(tl)
         if not league:
             reply(user_id, f'"{text}" not recognized.\n\n{WELCOME}')
-            return jsonify({}), 200
+            return
 
         s["league"] = league
         teams = espn.get_teams(league)
         if not teams:
             reply(user_id, "Couldn't load teams. Try again.\nText MENU to restart.")
             reset(user_id)
-            return jsonify({}), 200
+            return
 
         s["teams"] = teams
         s["step"]  = "TEAM"
@@ -227,7 +238,7 @@ def groupme_webhook():
         team  = pick_team(text, teams)
         if not team:
             reply(user_id, f'"{text}" not found.\nReply 1-{len(teams)} or type team name.\nText MENU to restart.')
-            return jsonify({}), 200
+            return
 
         s["team_id"]   = team["id"]
         s["team_name"] = team["name"]
@@ -239,7 +250,7 @@ def groupme_webhook():
         cat = CATEGORIES.get(tl)
         if not cat:
             reply(user_id, f'"{text}" not recognized.\n\n{CATEGORY_MENU}')
-            return jsonify({}), 200
+            return
 
         league    = s["league"]
         team_id   = s["team_id"]
@@ -288,7 +299,6 @@ def groupme_webhook():
         reset(user_id)
         reply(user_id, WELCOME)
 
-    return jsonify({}), 200
 
 
 # -- Health check --------------------------------------------------------------
