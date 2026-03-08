@@ -308,10 +308,10 @@ def get_standings(league, team_id, team_name):
         crawl(root)
 
     if len(lines) <= 2:
-        # Return debug info so we can see ESPN structure
         lines.append(f"Debug - top keys: {top_keys}")
         lines.append(f"Debug - child keys: {first_child_keys}")
         lines.append(f"Debug - sub keys: {sub_keys}")
+        lines.append(f"Debug - data None: {data is None}")
 
     return "\n".join(lines)
 
