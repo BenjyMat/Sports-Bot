@@ -1,6 +1,6 @@
 """
 espn.py -- ESPN Public API (100% free, no key needed)
-All data comes from ESPN's public API endpoints.
+No emojis -- works on any basic phone via SMS.
 """
 
 import requests
@@ -97,7 +97,7 @@ def get_scores(league, team_id, team_name):
                 date_str = dt.strftime("%a %b %-d")
             except Exception:
                 date_str = game_date[:10]
-            line = f"Upcoming {date_str} {home_away} {other_name}"
+            line = f"Next: {date_str} {home_away} {other_name}"
 
         lines.append(line)
 
@@ -210,7 +210,7 @@ def get_news(league, team_id, team_name):
     lines = [f"NEWS: {team_name.upper()}", "------------------"]
 
     if not articles:
-        lines.append("No news found right now. Try again later.")
+        lines.append("No news found right now.")
         return "\n".join(lines)
 
     for article in articles[:5]:
@@ -225,7 +225,7 @@ def get_news(league, team_id, team_name):
             pub_str = ""
 
         date_tag = f" [{pub_str}]" if pub_str else ""
-        lines.append(f"* {headline}{date_tag}")
+        lines.append(f"- {headline}{date_tag}")
         if desc:
             short_desc = desc[:120] + ("..." if len(desc) > 120 else "")
             lines.append(f"  {short_desc}")
@@ -254,7 +254,6 @@ def get_standings(league, team_id, team_name):
 
     lines = [f"STANDINGS: {league.upper()}", "------------------"]
 
-    # ESPN nests standings inside children at varying depths — crawl all levels
     def crawl(node, depth=0):
         name    = node.get("name", node.get("abbreviation", ""))
         entries = node.get("standings", {}).get("entries", [])
