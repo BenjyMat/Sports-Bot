@@ -80,10 +80,9 @@ def get_scores(league, team_id, team_name):
         other_score = other_team.get("score", "?")
         other_name  = other_team.get("team", {}).get("shortDisplayName", "Opponent")
         home_away   = "vs" if our_team.get("homeAway") == "home" else "@"
-
-        status = event.get("status", {})
-        state  = status.get("type", {}).get("state", "pre")
-        detail = status.get("type", {}).get("shortDetail", "")
+        status      = event.get("status", {})
+        state       = status.get("type", {}).get("state", "pre")
+        detail      = status.get("type", {}).get("shortDetail", "")
 
         if state == "in":
             line = f"LIVE {detail}\n  {team_name} {our_score} {home_away} {other_name} {other_score}"
@@ -98,7 +97,7 @@ def get_scores(league, team_id, team_name):
                 date_str = dt.strftime("%a %b %-d")
             except Exception:
                 date_str = game_date[:10]
-            line = f"Upcoming: {date_str} {home_away} {other_name}"
+            line = f"Upcoming {date_str} {home_away} {other_name}"
 
         lines.append(line)
 
@@ -114,10 +113,10 @@ def get_schedule(league, team_id, team_name):
     if not data:
         return f"Couldn't fetch schedule for {team_name}."
 
-    lines  = [f"SCHEDULE: {team_name.upper()}", "------------------"]
-    events = data.get("events", [])
-
+    lines    = [f"SCHEDULE: {team_name.upper()}", "------------------"]
+    events   = data.get("events", [])
     upcoming = []
+
     for event in events:
         status = event.get("competitions", [{}])[0].get("status", {})
         state  = status.get("type", {}).get("state", "pre")
@@ -132,9 +131,9 @@ def get_schedule(league, team_id, team_name):
         comp      = event.get("competitions", [{}])[0]
         game_date = event.get("date", "")
         opponents = comp.get("competitors", [])
-
         home_away = "vs"
         opp_name  = "TBD"
+
         for t in opponents:
             if t.get("team", {}).get("id") != team_id:
                 opp_name  = t.get("team", {}).get("shortDisplayName", "Opponent")
@@ -159,8 +158,8 @@ def get_roster(league, team_id, team_name):
 
     lines    = [f"ROSTER: {team_name.upper()}", "------------------"]
     athletes = data.get("athletes", [])
+    players  = []
 
-    players = []
     if athletes and isinstance(athletes[0], dict) and "items" in athletes[0]:
         for group in athletes:
             pos_label = group.get("position", "")
@@ -191,16 +190,13 @@ def get_roster(league, team_id, team_name):
 # -- News ----------------------------------------------------------------------
 def get_news(league, team_id, team_name):
     sport, lg = SPORT_MAP[league]
-
-    # Try every known ESPN news endpoint format
-    # Different leagues use different endpoints so we try all of them
     attempts = [
-        (url(league, f"/teams/{team_id}/news"),                          None),
-        (url(league, "/news"),                                           {"team": team_id}),
-        (f"{CDNBASE}/{sport}/{lg}/teams/{team_id}/news",                 None),
-        ("https://site.api.espn.com/apis/site/v2/sports/news",          {"team": team_id}),
-        (f"https://site.api.espn.com/apis/v2/sports/{sport}/{lg}/news", {"team": team_id}),
-        (url(league, "/news"),                                           None),
+        (url(league, f"/teams/{team_id}/news"),                           None),
+        (url(league, "/news"),                                            {"team": team_id}),
+        (f"{CDNBASE}/{sport}/{lg}/teams/{team_id}/news",                  None),
+        ("https://site.api.espn.com/apis/site/v2/sports/news",           {"team": team_id}),
+        (f"https://site.api.espn.com/apis/v2/sports/{sport}/{lg}/news",  {"team": team_id}),
+        (url(league, "/news"),                                            None),
     ]
 
     articles = []
@@ -239,6 +235,18 @@ def get_news(league, team_id, team_name):
 
 
 # -- Standings -----------------------------------------------------------------
+def _parse_entries(entries, team_name, lines):
+    for entry in entries[:10]:
+        team   = entry.get("team", {}).get("displayName", "?")
+        stats  = {s["name"]: s["displayValue"] for s in entry.get("stats", [])}
+        wins   = stats.get("wins",       stats.get("W",   stats.get("w",   "?")))
+        losses = stats.get("losses",     stats.get("L",   stats.get("l",   "?")))
+        pct    = stats.get("winPercent", stats.get("PCT", stats.get("pct", "")))
+        pct_str = f" ({pct})" if pct and pct not in ("0", "0.0", ".000") else ""
+        marker  = " <--YOU" if team_name.lower() in team.lower() else ""
+        lines.append(f"  {team}: {wins}-{losses}{pct_str}{marker}")
+
+
 def get_standings(league, team_id, team_name):
     data = safe_get(url(league, "/standings"))
     if not data:
@@ -246,20 +254,21 @@ def get_standings(league, team_id, team_name):
 
     lines = [f"STANDINGS: {league.upper()}", "------------------"]
 
-    for group in data.get("children", []):
-        conf = group.get("name", "")
-        if conf:
-            lines.append(f"\n{conf}")
-        entries = group.get("standings", {}).get("entries", [])
-        for entry in entries[:8]:
-            team   = entry.get("team", {}).get("displayName", "?")
-            stats  = {s["name"]: s["displayValue"] for s in entry.get("stats", [])}
-            wins   = stats.get("wins",   stats.get("W", "?"))
-            losses = stats.get("losses", stats.get("L", "?"))
-            pct    = stats.get("winPercent", stats.get("PCT", ""))
-            pct_str = f" ({pct})" if pct else ""
-            marker  = " <--YOU" if team_name.lower() in team.lower() else ""
-            lines.append(f"  {team}: {wins}-{losses}{pct_str}{marker}")
+    # ESPN nests standings inside children at varying depths — crawl all levels
+    def crawl(node, depth=0):
+        name    = node.get("name", node.get("abbreviation", ""))
+        entries = node.get("standings", {}).get("entries", [])
+        if entries:
+            if name and depth > 0:
+                lines.append(f"\n{name}")
+            _parse_entries(entries, team_name, lines)
+        for child in node.get("children", []):
+            crawl(child, depth + 1)
+
+    crawl(data)
+
+    if len(lines) <= 2:
+        lines.append("No standings data found.")
 
     return "\n".join(lines)
 
