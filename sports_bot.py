@@ -179,6 +179,8 @@ def handle_message(user_id, data):
     tl   = text.lower()
     name = data.get("name", "Someone")
 
+
+
     # Store name in session for use in replies
     if user_id:
         s = session(user_id)
@@ -286,8 +288,6 @@ def handle_message(user_id, data):
         team_id   = s["team_id"]
         team_name = s["team_name"]
 
-        reply(user_id, f"Fetching {cat} for {team_name}...")
-
         # ESPN can be slow -- send a reminder if it takes over 10 seconds
         result_holder = [None]
         def fetch():
@@ -296,8 +296,8 @@ def handle_message(user_id, data):
         t.start()
         t.join(timeout=10)
         if t.is_alive():
-            reply(user_id, "Still loading, hang tight...")
-            t.join(timeout=15)  # wait up to 15 more seconds
+            reply(user_id, "Still loading...")
+            t.join(timeout=15)
         result = result_holder[0] or "Could not load data. Try again."
         s["step"] = "AGAIN"
         uname     = s.get("name", "Someone")
@@ -307,9 +307,9 @@ def handle_message(user_id, data):
             for i, msg in enumerate(result):
                 prefix = tag + "\n" if i == 0 else tag + " (cont.)\n"
                 reply(user_id, prefix + msg)
+            reply(user_id, AFTER_MENU)
         else:
-            reply(user_id, tag + "\n" + result)
-        reply(user_id, tag + "\n" + AFTER_MENU)
+            reply(user_id, tag + "\n" + result + "\n\n" + AFTER_MENU)
 
     # STEP 4: After results
     elif step == "AGAIN":
