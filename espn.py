@@ -255,7 +255,18 @@ def _parse_entries(entries, team_name, lines):
 
 
 def get_standings(league, team_id, team_name):
-    data = safe_get(url(league, "/standings"))
+    # Try multiple known ESPN standings endpoints
+    data = None
+    sport, lg = SPORT_MAP[league]
+    for endpoint in [
+        f"{BASE}/{sport}/{lg}/standings",
+        f"https://site.web.api.espn.com/apis/v2/sports/{sport}/{lg}/standings",
+        f"https://cdn.espn.com/core/{sport}/{lg}/standings?xhr=1",
+    ]:
+        data = safe_get(endpoint)
+        if data:
+            break
+
     if not data:
         return f"Couldn't fetch standings for {league.upper()}."
 
@@ -263,15 +274,29 @@ def get_standings(league, team_id, team_name):
 
     def crawl(node, depth=0):
         name    = node.get("name", node.get("abbreviation", ""))
-        entries = node.get("standings", {}).get("entries", [])
+        # Check both "standings.entries" and direct "entries"
+        entries = (node.get("standings") or {}).get("entries", [])
+        if not entries:
+            entries = node.get("entries", [])
         if entries:
             if name and depth > 0:
                 lines.append(f"\n{name}")
             _parse_entries(entries, team_name, lines)
-        for child in node.get("children", []):
-            crawl(child, depth + 1)
+        # Recurse into children, groups, divisions — whatever ESPN calls them
+        for key in ("children", "groups", "divisions", "conferences"):
+            for child in node.get(key, []):
+                crawl(child, depth + 1)
 
-    crawl(data)
+    # Also check if data is wrapped in a "content" or "sports" key
+    root = data
+    for wrapper in ("content", "standings", "sports"):
+        if wrapper in data:
+            root = data[wrapper]
+            if isinstance(root, list):
+                root = root[0]
+            break
+
+    crawl(root)
 
     if len(lines) <= 2:
         lines.append("No standings data found.")
