@@ -23,9 +23,9 @@ sessions = {}
 # ── League/Category constants ──────────────────────────────────────────────────
 LEAGUES      = {"1": "nhl", "2": "nba", "3": "nfl", "4": "mlb",
                 "nhl": "nhl", "nba": "nba", "nfl": "nfl", "mlb": "mlb"}
-CATEGORIES   = {"1": "scores", "2": "schedule", "3": "roster", "4": "news",
+CATEGORIES   = {"1": "scores", "2": "schedule", "3": "roster", "4": "news", "5": "standings",
                 "scores": "scores", "schedule": "schedule",
-                "roster": "roster", "news": "news"}
+                "roster": "roster", "news": "news", "standings": "standings"}
 LEAGUE_EMOJI = {"nhl": "🏒", "nba": "🏀", "nfl": "🏈", "mlb": "⚾"}
 
 WELCOME = (
@@ -45,6 +45,7 @@ CATEGORY_MENU = (
     "2. Schedule\n"
     "3. Roster\n"
     "4. News\n"
+    "5. Standings\n"
     "Reply with number or word."
 )
 
