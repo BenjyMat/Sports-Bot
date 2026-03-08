@@ -229,6 +229,32 @@ def get_news(league, team_id, team_name):
     return "\n".join(lines).strip()
 
 
+# ── Standings ──────────────────────────────────────────────────────────────────
+def get_standings(league, team_id, team_name):
+    data = safe_get(url(league, "/standings"))
+    if not data:
+        return f"Couldn't fetch standings for {league.upper()}."
+
+    lines = [f"🏆 {league.upper()} STANDINGS", "━━━━━━━━━━━━━━━━━━"]
+
+    for group in data.get("children", []):
+        conf = group.get("name", "")
+        if conf:
+            lines.append(f"\n{conf}")
+        entries = group.get("standings", {}).get("entries", [])
+        for entry in entries[:8]:
+            team  = entry.get("team", {}).get("displayName", "?")
+            stats = {s["name"]: s["displayValue"] for s in entry.get("stats", [])}
+            wins   = stats.get("wins",   stats.get("W", "?"))
+            losses = stats.get("losses", stats.get("L", "?"))
+            pct    = stats.get("winPercent", stats.get("PCT", ""))
+            pct_str    = f" ({pct})" if pct else ""
+            marker = " ◀" if team_name.lower() in team.lower() else ""
+            lines.append(f"  {team}: {wins}-{losses}{pct_str}{marker}")
+
+    return "\n".join(lines)
+
+
 # ── Dispatcher ─────────────────────────────────────────────────────────────────
 def get_data(league, team_id, team_name, category):
     if category == "scores":
@@ -239,4 +265,6 @@ def get_data(league, team_id, team_name, category):
         return get_roster(league, team_id, team_name)
     elif category == "news":
         return get_news(league, team_id, team_name)
+    elif category == "standings":
+        return get_standings(league, team_id, team_name)
     return "Unknown category."
