@@ -7,6 +7,24 @@ import requests
 from datetime import datetime
 
 BASE    = "https://site.api.espn.com/apis/site/v2/sports"
+
+# Simple cache: { "nba-celtics-scores": (timestamp, result) }
+# Scores/news cache 2 min, schedule/roster/standings cache 30 min
+import time as _time
+_cache = {}
+CACHE_SHORT = 10    # 10 seconds (scores, news)
+CACHE_LONG  = 1800  # 30 minutes (schedule, roster, standings)
+
+def _cached(key, ttl, fetch_fn):
+    now = _time.time()
+    if key in _cache:
+        ts, val = _cache[key]
+        if now - ts < ttl:
+            return val
+    result = fetch_fn()
+    if result:
+        _cache[key] = (now, result)
+    return result
 CDNBASE = "https://site.web.api.espn.com/apis/site/v2/sports"
 TIMEOUT = 20
 
@@ -33,7 +51,7 @@ def safe_get(endpoint, params=None):
 
 
 # -- Teams ---------------------------------------------------------------------
-def get_teams(league):
+def _get_teams_raw(league):
     data = safe_get(url(league, "/teams"), {"limit": 50})
     if not data:
         return []
@@ -290,13 +308,6 @@ def get_standings(league, team_id, team_name):
             for child in node.get(key, []):
                 crawl(child, depth + 1)
 
-    # Log top-level keys to group chat for debugging
-    top_keys = list(data.keys())
-    children  = data.get("children", [])
-    first_child_keys = list(children[0].keys()) if children else []
-    sub = children[0].get("children", []) if children else []
-    sub_keys = list(sub[0].keys()) if sub else []
-
     # Try every possible root
     roots_to_try = [data]
     for wrapper in ("content", "standings", "sports"):
@@ -308,24 +319,32 @@ def get_standings(league, team_id, team_name):
         crawl(root)
 
     if len(lines) <= 2:
-        lines.append(f"Debug - top keys: {top_keys}")
-        lines.append(f"Debug - child keys: {first_child_keys}")
-        lines.append(f"Debug - sub keys: {sub_keys}")
-        lines.append(f"Debug - data None: {data is None}")
+        lines.append("No standings data found.")
 
     return "\n".join(lines)
 
 
 # -- Dispatcher ----------------------------------------------------------------
 def get_data(league, team_id, team_name, category):
-    if category == "scores":
-        return get_scores(league, team_id, team_name)
-    elif category == "schedule":
-        return get_schedule(league, team_id, team_name)
-    elif category == "roster":
-        return get_roster(league, team_id, team_name)
-    elif category == "news":
-        return get_news(league, team_id, team_name)
-    elif category == "standings":
-        return get_standings(league, team_id, team_name)
-    return "Unknown category."
+    key = f"{league}-{team_id}-{category}"
+    ttl = CACHE_SHORT if category in ("scores", "news") else CACHE_LONG
+
+    def fetch():
+        if category == "scores":
+            return get_scores(league, team_id, team_name)
+        elif category == "schedule":
+            return get_schedule(league, team_id, team_name)
+        elif category == "roster":
+            return get_roster(league, team_id, team_name)
+        elif category == "news":
+            return get_news(league, team_id, team_name)
+        elif category == "standings":
+            return get_standings(league, team_id, team_name)
+        return "Unknown category."
+
+    return _cached(key, ttl, fetch)
+
+
+def get_teams(league):
+    """Cached team list - rarely changes so cache for 6 hours."""
+    return _cached(f"teams-{league}", 21600, lambda: _get_teams_raw(league))
