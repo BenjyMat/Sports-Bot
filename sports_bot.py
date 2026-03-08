@@ -1,7 +1,7 @@
 """
 sports_bot.py -- GroupMe Sports Bot
 Receives messages from a group, replies via PRIVATE DM to each user.
-Nobody sees anyone else's conversation!
+No emojis -- works on any basic phone via SMS.
 """
 
 from flask import Flask, request, jsonify
@@ -14,7 +14,6 @@ app = Flask(__name__)
 BOT_ID       = os.environ.get("GROUPME_BOT_ID",       "YOUR_BOT_ID_HERE")
 ACCESS_TOKEN = os.environ.get("GROUPME_ACCESS_TOKEN", "YOUR_TOKEN_HERE")
 
-# In-memory sessions: { user_id: { step, league, team_id, team_name, teams } }
 sessions = {}
 
 LEAGUES    = {"1": "nhl", "2": "nba", "3": "nfl", "4": "mlb",
@@ -22,8 +21,6 @@ LEAGUES    = {"1": "nhl", "2": "nba", "3": "nfl", "4": "mlb",
 CATEGORIES = {"1": "scores", "2": "schedule", "3": "roster", "4": "news", "5": "standings",
               "scores": "scores", "schedule": "schedule", "roster": "roster",
               "news": "news", "standings": "standings"}
-
-LEAGUE_EMOJI = {"nhl": "Hockey", "nba": "Basketball", "nfl": "Football", "mlb": "Baseball"}
 
 WELCOME = (
     "SPORTS BOT\n"
@@ -57,7 +54,6 @@ AFTER_MENU = (
 
 # -- Messaging -----------------------------------------------------------------
 def send_dm(user_id, text):
-    """Send a private DM to a specific user. Only they can see it."""
     try:
         requests.post(
             "https://api.groupme.com/v3/direct_messages",
@@ -76,7 +72,6 @@ def send_dm(user_id, text):
 
 
 def send_group(text):
-    """Fallback: post to group (only used if DM fails)."""
     try:
         requests.post(
             "https://api.groupme.com/v3/bots/post",
@@ -88,7 +83,6 @@ def send_group(text):
 
 
 def reply(user_id, text):
-    """Try DM first, fall back to group post."""
     if ACCESS_TOKEN and ACCESS_TOKEN != "YOUR_TOKEN_HERE":
         send_dm(user_id, text)
     else:
@@ -135,13 +129,11 @@ def groupme_webhook():
     text        = data.get("text", "").strip()
     sender_type = data.get("sender_type", "")
 
-    # Ignore bot's own messages and empty messages
     if sender_type == "bot" or not text:
         return jsonify({}), 200
 
     tl = text.lower()
 
-    # Global commands
     if tl in ("menu", "restart", "reset", "start", "hi", "hello"):
         reset(user_id)
         reply(user_id, WELCOME)
@@ -179,7 +171,7 @@ def groupme_webhook():
         s["teams"] = teams
         s["step"]  = "TEAM"
         reply(user_id, (
-            f"{league.upper()} -- Choose a team:\n"
+            f"{league.upper()} - Choose a team:\n"
             f"------------------\n"
             f"{team_list_text(teams)}\n\n"
             f"Reply with number or team name."
@@ -227,7 +219,7 @@ def groupme_webhook():
             s["teams"] = teams
             s["step"]  = "TEAM"
             reply(user_id, (
-                f"{league.upper()} -- Pick a team:\n"
+                f"{league.upper()} - Pick a team:\n"
                 f"------------------\n"
                 f"{team_list_text(teams)}\n\n"
                 f"Reply with number or team name."
