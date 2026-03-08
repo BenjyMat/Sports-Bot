@@ -8,7 +8,7 @@ from datetime import datetime
 
 BASE    = "https://site.api.espn.com/apis/site/v2/sports"
 CDNBASE = "https://site.web.api.espn.com/apis/site/v2/sports"
-TIMEOUT = 8
+TIMEOUT = 20
 
 SPORT_MAP = {
     "nhl": ("hockey",     "nhl"),
