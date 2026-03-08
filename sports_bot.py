@@ -120,7 +120,10 @@ def chunk_message(text):
 
 def reply(user_id, text):
     """Send a reply, automatically splitting if over GroupMe limit."""
-    for chunk in chunk_message(text):
+    chunks = chunk_message(text)
+    for i, chunk in enumerate(chunks):
+        if i > 0:
+            time.sleep(0.8)  # wait between chunks so they arrive in order
         send_group(chunk)
 
 
@@ -347,8 +350,11 @@ def handle_message(user_id, data):
         tag       = "[" + uname + "]"
         if isinstance(result, list):
             for i, msg in enumerate(result):
+                if i > 0:
+                    time.sleep(1)
                 prefix = tag + "\n" if i == 0 else tag + " (cont.)\n"
                 reply(user_id, prefix + msg)
+            time.sleep(1)
             reply(user_id, AFTER_MENU)
         else:
             reply(user_id, tag + "\n" + result + "\n\n" + AFTER_MENU)
