@@ -135,7 +135,13 @@ def groupme_webhook():
     if sender_type == "bot" or not text:
         return jsonify({}), 200
 
-    tl = text.lower()
+    tl   = text.lower()
+    name = data.get("name", "Someone")
+
+    # Store name in session for use in replies
+    if user_id:
+        s = session(user_id)
+        s["name"] = name
 
     # -- Ban check -------------------------------------------------------------
     if user_id in bans:
@@ -242,13 +248,16 @@ def groupme_webhook():
         reply(user_id, f"Fetching {cat} for {team_name}...")
         result    = espn.get_data(league, team_id, team_name, cat)
         s["step"] = "AGAIN"
+        uname     = s.get("name", "Someone")
+        tag       = f"[{uname}]"
         # Roster returns a list of messages; everything else returns a string
         if isinstance(result, list):
-            for msg in result:
-                reply(user_id, msg)
+            for i, msg in enumerate(result):
+                prefix = tag + "\n" if i == 0 else tag + " (cont.)\n"
+                reply(user_id, prefix + msg)
         else:
-            reply(user_id, result)
-        reply(user_id, AFTER_MENU)
+            reply(user_id, tag + "\n" + result)
+        reply(user_id, tag + "\n" + AFTER_MENU)
 
     # STEP 4: After results
     elif step == "AGAIN":
