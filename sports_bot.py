@@ -78,19 +78,49 @@ def send_dm(user_id, text):
         pass
 
 
+# GroupMe message hard limit is 1000 chars — split anything longer
+MSG_LIMIT = 900
+
 def send_group(text):
-    try:
-        requests.post(
-            "https://api.groupme.com/v3/bots/post",
-            json={"bot_id": BOT_ID, "text": text},
-            timeout=5,
-        )
-    except Exception:
-        pass
+    """Send one message, retry once on failure."""
+    for attempt in range(2):
+        try:
+            r = requests.post(
+                "https://api.groupme.com/v3/bots/post",
+                json={"bot_id": BOT_ID, "text": text},
+                timeout=10,
+            )
+            if r.status_code == 202:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def chunk_message(text):
+    """Split a message into <=900 char pieces, breaking on newlines."""
+    if len(text) <= MSG_LIMIT:
+        return [text]
+
+    parts = []
+    current = ""
+    for line in text.split("\n"):
+        # +1 for the newline character
+        if len(current) + len(line) + 1 > MSG_LIMIT:
+            if current:
+                parts.append(current.strip())
+            current = line
+        else:
+            current = current + "\n" + line if current else line
+    if current:
+        parts.append(current.strip())
+    return parts
 
 
 def reply(user_id, text):
-    send_group(text)
+    """Send a reply, automatically splitting if over GroupMe limit."""
+    for chunk in chunk_message(text):
+        send_group(chunk)
 
 
 # -- Session helpers -----------------------------------------------------------
@@ -257,7 +287,18 @@ def handle_message(user_id, data):
         team_name = s["team_name"]
 
         reply(user_id, f"Fetching {cat} for {team_name}...")
-        result    = espn.get_data(league, team_id, team_name, cat)
+
+        # ESPN can be slow -- send a reminder if it takes over 10 seconds
+        result_holder = [None]
+        def fetch():
+            result_holder[0] = espn.get_data(league, team_id, team_name, cat)
+        t = threading.Thread(target=fetch)
+        t.start()
+        t.join(timeout=10)
+        if t.is_alive():
+            reply(user_id, "Still loading, hang tight...")
+            t.join(timeout=15)  # wait up to 15 more seconds
+        result = result_holder[0] or "Could not load data. Try again."
         s["step"] = "AGAIN"
         uname     = s.get("name", "Someone")
         tag       = f"[{uname}]"
