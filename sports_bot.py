@@ -1,7 +1,6 @@
 """
 sports_bot.py -- GroupMe Sports Bot
-Receives messages from a group, replies via PRIVATE DM to each user.
-No emojis -- works on any basic phone via SMS.
+Works on any basic phone via SMS. No emojis.
 """
 
 from flask import Flask, request, jsonify
@@ -9,20 +8,20 @@ import os
 import requests
 import espn
 import threading
+import time
 
 app = Flask(__name__)
 
 BOT_ID       = os.environ.get("GROUPME_BOT_ID",       "YOUR_BOT_ID_HERE")
 ACCESS_TOKEN = os.environ.get("GROUPME_ACCESS_TOKEN", "YOUR_TOKEN_HERE")
 
-sessions = {}
-bans = {}      # { user_id: ban_expiry_timestamp }
-favorites = {} # { user_id: { "nhl": {id, name}, "nba": ..., "nfl": ..., "mlb": ... } }
+sessions  = {}
+bans      = {}
+favorites = {}
 
 # -- Prank config --------------------------------------------------------------
-import time
-PRANK_USER = "18483671827"  # Shimshy's number (E.164 format)
-PRANK_ASKED = set()  # track if we've asked him the question
+PRANK_USER  = "18483671827"
+PRANK_ASKED = set()
 
 LEAGUES    = {"1": "nhl", "2": "nba", "3": "nfl", "4": "mlb",
               "nhl": "nhl", "nba": "nba", "nfl": "nfl", "mlb": "mlb"}
@@ -42,48 +41,22 @@ WELCOME = (
 )
 
 CATEGORY_MENU = (
-    "What do you want?\n"
-    "1. Scores\n"
-    "2. Schedule\n"
-    "3. Roster\n"
-    "4. News\n"
-    "5. Standings\n"
-    "Reply with number or word."
+    "1. Scores  2. Schedule\n"
+    "3. Roster  4. News\n"
+    "5. Standings"
 )
 
 AFTER_MENU = (
-    "Want more?\n"
     "1. Same team\n"
     "2. New team\n"
-    "3. New league\n"
-    "Or text MENU to restart."
+    "3. New league"
 )
 
 
 # -- Messaging -----------------------------------------------------------------
-def send_dm(user_id, text):
-    try:
-        requests.post(
-            "https://api.groupme.com/v3/direct_messages",
-            params={"token": ACCESS_TOKEN},
-            json={
-                "direct_message": {
-                    "source_guid": f"sports-{user_id}-{hash(text)}",
-                    "recipient_id": user_id,
-                    "text": text,
-                }
-            },
-            timeout=5,
-        )
-    except Exception:
-        pass
-
-
-# GroupMe message hard limit is 1000 chars — split anything longer
 MSG_LIMIT = 900
 
 def send_group(text):
-    """Send one message, retry once on failure."""
     for attempt in range(2):
         try:
             r = requests.post(
@@ -99,14 +72,11 @@ def send_group(text):
 
 
 def chunk_message(text):
-    """Split a message into <=900 char pieces, breaking on newlines."""
     if len(text) <= MSG_LIMIT:
         return [text]
-
-    parts = []
+    parts   = []
     current = ""
     for line in text.split("\n"):
-        # +1 for the newline character
         if len(current) + len(line) + 1 > MSG_LIMIT:
             if current:
                 parts.append(current.strip())
@@ -119,11 +89,10 @@ def chunk_message(text):
 
 
 def reply(user_id, text):
-    """Send a reply, automatically splitting if over GroupMe limit."""
     chunks = chunk_message(text)
     for i, chunk in enumerate(chunks):
         if i > 0:
-            time.sleep(0.8)  # wait between chunks so they arrive in order
+            time.sleep(0.8)
         send_group(chunk)
 
 
@@ -159,8 +128,25 @@ def pick_team(text, teams):
     return None
 
 
-# -- Main webhook --------------------------------------------------------------
+# -- Webhook (returns instantly, processes in background) ----------------------
 @app.route("/groupme", methods=["POST"])
+def groupme_webhook():
+    data        = request.get_json(force=True)
+    sender_type = data.get("sender_type", "")
+    text        = data.get("text", "").strip()
+    if sender_type == "bot" or not text:
+        return jsonify({}), 200
+    threading.Thread(target=handle_message, args=(data.get("user_id", ""), data), daemon=True).start()
+    return jsonify({}), 200
+
+
+# -- Health check --------------------------------------------------------------
+@app.route("/", methods=["GET"])
+def health():
+    return "Sports Bot is running!", 200
+
+
+# -- Message handler -----------------------------------------------------------
 def handle_message(user_id, data):
     text = data.get("text", "").strip()
     tl   = text.lower()
@@ -207,17 +193,46 @@ def handle_message(user_id, data):
         return
 
     if tl == "help":
-        reply(user_id, "SPORTS BOT HELP\n---------------\nMENU - restart\nFAV  - set favorites\nMY   - use favorites\nPick league, team,\nthen what you want.")
+        reply(user_id,
+            "SPORTS BOT HELP\n"
+            "---------------\n"
+            "HOW TO START:\n"
+            "Text MENU to begin.\n"
+            "Pick league (1-4),\n"
+            "then pick your team,\n"
+            "then pick what you want.\n"
+            "\n"
+            "CATEGORIES:\n"
+            "1. Scores - latest results\n"
+            "2. Schedule - next 6 games\n"
+            "3. Roster - full player list\n"
+            "4. News - latest headlines\n"
+            "5. Standings - league table\n"
+            "\n"
+            "SHORTCUTS:\n"
+            "MENU - start over\n"
+            "FAV  - save favorite teams\n"
+            "       (1 per league)\n"
+            "MY   - jump straight to\n"
+            "       your favorite team\n"
+            "HELP - show this message\n"
+            "\n"
+            "TIPS:\n"
+            "- Type team name or number\n"
+            "- After results reply 1,2,3\n"
+            "  to keep going fast\n"
+            "- Works on any phone!"
+        )
         return
 
     # -- FAV command -----------------------------------------------------------
     if tl == "fav":
-        favs      = favorites.get(user_id, {})
-        nhl_name  = favs.get("nhl", {}).get("name", "not set")
-        nba_name  = favs.get("nba", {}).get("name", "not set")
-        nfl_name  = favs.get("nfl", {}).get("name", "not set")
-        mlb_name  = favs.get("mlb", {}).get("name", "not set")
-        s         = session(user_id)
+        favs     = favorites.get(user_id, {})
+        nhl_name = favs.get("nhl", {}).get("name", "not set")
+        nba_name = favs.get("nba", {}).get("name", "not set")
+        nfl_name = favs.get("nfl", {}).get("name", "not set")
+        mlb_name = favs.get("mlb", {}).get("name", "not set")
+        s        = session(user_id)
         s["step"] = "FAV_LEAGUE"
         reply(user_id, "Your favorites:\nNHL: " + nhl_name + "\nNBA: " + nba_name + "\nNFL: " + nfl_name + "\nMLB: " + mlb_name + "\n\nSet one:\n1. NHL  2. NBA\n3. NFL  4. MLB")
         return
@@ -233,7 +248,7 @@ def handle_message(user_id, data):
         for i, (lg, team) in enumerate(set_favs, 1):
             lines.append(str(i) + ". " + lg.upper() + " - " + team["name"])
         lines.append("Pick one.")
-        s         = session(user_id)
+        s            = session(user_id)
         s["step"]    = "MY_PICK"
         s["my_favs"] = set_favs
         reply(user_id, "\n".join(lines))
@@ -378,9 +393,6 @@ def handle_message(user_id, data):
     else:
         reset(user_id)
         reply(user_id, WELCOME)
-
-def health():
-    return "Sports Bot is running!", 200
 
 
 if __name__ == "__main__":
