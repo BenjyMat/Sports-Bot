@@ -16,7 +16,8 @@ BOT_ID       = os.environ.get("GROUPME_BOT_ID",       "YOUR_BOT_ID_HERE")
 ACCESS_TOKEN = os.environ.get("GROUPME_ACCESS_TOKEN", "YOUR_TOKEN_HERE")
 
 sessions = {}
-bans = {}  # { user_id: ban_expiry_timestamp }
+bans = {}      # { user_id: ban_expiry_timestamp }
+favorites = {} # { user_id: { "nhl": {id, name}, "nba": ..., "nfl": ..., "mlb": ... } }
 
 # -- Prank config --------------------------------------------------------------
 import time
@@ -157,31 +158,11 @@ def pick_team(text, teams):
 
 # -- Main webhook --------------------------------------------------------------
 @app.route("/groupme", methods=["POST"])
-def groupme_webhook():
-    data        = request.get_json(force=True)
-    user_id     = data.get("user_id", "")
-    text        = data.get("text", "").strip()
-    sender_type = data.get("sender_type", "")
-
-    if sender_type == "bot" or not text:
-        return jsonify({}), 200
-
-    # Respond to GroupMe instantly so it never retries/duplicates
-    # Process everything in background thread
-    def process():
-        handle_message(user_id, data)
-    threading.Thread(target=process, daemon=True).start()
-    return jsonify({}), 200
-
-
 def handle_message(user_id, data):
     text = data.get("text", "").strip()
     tl   = text.lower()
     name = data.get("name", "Someone")
 
-
-
-    # Store name in session for use in replies
     if user_id:
         s = session(user_id)
         s["name"] = name
@@ -193,102 +174,164 @@ def handle_message(user_id, data):
             reply(user_id, "You are banned for " + str(mins_left) + " more minute(s).\nKnicks fan.")
             return
         else:
-            del bans[user_id]  # ban expired
+            del bans[user_id]
 
     # -- Prank for Shimshy -----------------------------------------------------
-    phone = data.get("sender_id", data.get("user_id", ""))
+    phone      = data.get("sender_id", data.get("user_id", ""))
     normalized = phone.replace("+", "").replace("-", "").replace(" ", "")
     if PRANK_USER in normalized or normalized in PRANK_USER:
         if user_id not in PRANK_ASKED:
             PRANK_ASKED.add(user_id)
             reply(user_id, "Before you can use Sports Bot\nyou must answer one question:\n\nWho is better,\nthe Lakers or the Knicks?")
             return
-        elif user_id in PRANK_ASKED and tl not in ("lakers", "la lakers", "los angeles lakers"):
-            if any(x in tl for x in ("knicks", "new york", "ny")):
-                bans[user_id] = time.time() + 3600  # 1 hour ban
-                PRANK_ASKED.discard(user_id)
-                reply(user_id, "WRONG.\n\nYou have been banned\nfor 1 hour.\n\nShame on you.")
-                return
-            elif any(x in tl for x in ("lakers", "la lakers", "los angeles lakers")):
-                PRANK_ASKED.discard(user_id)
-                reply(user_id, "Correct! Good taste.\nWelcome to Sports Bot!\n\n" + WELCOME)
-                return
-            else:
-                reply(user_id, "Just answer the question:\nLakers or Knicks?")
-                return
+        elif any(x in tl for x in ("knicks", "new york", "ny")):
+            bans[user_id] = time.time() + 3600
+            PRANK_ASKED.discard(user_id)
+            reply(user_id, "WRONG.\n\nYou have been banned\nfor 1 hour.\n\nShame on you.")
+            return
         elif any(x in tl for x in ("lakers", "la lakers", "los angeles lakers")):
             PRANK_ASKED.discard(user_id)
             reply(user_id, "Correct! Good taste.\nWelcome to Sports Bot!\n\n" + WELCOME)
             return
+        elif user_id in PRANK_ASKED:
+            reply(user_id, "Just answer the question:\nLakers or Knicks?")
+            return
 
+    # -- Global commands -------------------------------------------------------
     if tl in ("menu", "restart", "reset", "start", "hi", "hello"):
         reset(user_id)
         reply(user_id, WELCOME)
         return
 
     if tl == "help":
-        reply(user_id, (
-            "SPORTS BOT HELP\n"
-            "---------------\n"
-            "Text MENU to start.\n"
-            "Pick league, team,\n"
-            "then what you want.\n"
-            "Replies are private -\n"
-            "only YOU see them!"
-        ))
+        reply(user_id, "SPORTS BOT HELP\n---------------\nMENU - restart\nFAV  - set favorites\nMY   - use favorites\nPick league, team,\nthen what you want.")
+        return
+
+    # -- FAV command -----------------------------------------------------------
+    if tl == "fav":
+        favs      = favorites.get(user_id, {})
+        nhl_name  = favs.get("nhl", {}).get("name", "not set")
+        nba_name  = favs.get("nba", {}).get("name", "not set")
+        nfl_name  = favs.get("nfl", {}).get("name", "not set")
+        mlb_name  = favs.get("mlb", {}).get("name", "not set")
+        s         = session(user_id)
+        s["step"] = "FAV_LEAGUE"
+        reply(user_id, "Your favorites:\nNHL: " + nhl_name + "\nNBA: " + nba_name + "\nNFL: " + nfl_name + "\nMLB: " + mlb_name + "\n\nSet one:\n1. NHL  2. NBA\n3. NFL  4. MLB")
+        return
+
+    # -- MY command ------------------------------------------------------------
+    if tl == "my":
+        favs     = favorites.get(user_id, {})
+        set_favs = [(lg, favs[lg]) for lg in ("nhl", "nba", "nfl", "mlb") if favs.get(lg)]
+        if not set_favs:
+            reply(user_id, "No favorites set yet.\nText FAV to set them.")
+            return
+        lines = ["Your favorites:"]
+        for i, (lg, team) in enumerate(set_favs, 1):
+            lines.append(str(i) + ". " + lg.upper() + " - " + team["name"])
+        lines.append("Pick one.")
+        s         = session(user_id)
+        s["step"]    = "MY_PICK"
+        s["my_favs"] = set_favs
+        reply(user_id, "\n".join(lines))
         return
 
     s    = session(user_id)
     step = s.get("step", "LEAGUE")
 
-    # STEP 1: Choose League
+    # STEP FAV_LEAGUE ----------------------------------------------------------
+    if step == "FAV_LEAGUE":
+        league = LEAGUES.get(tl)
+        if not league:
+            reply(user_id, "Pick a league:\n1. NHL  2. NBA\n3. NFL  4. MLB")
+            return
+        teams = espn.get_teams(league)
+        if not teams:
+            reply(user_id, "Couldn't load teams. Try again.")
+            return
+        s["fav_league"] = league
+        s["teams"]      = teams
+        s["step"]       = "FAV_TEAM"
+        reply(user_id, league.upper() + " - Pick your favorite:\n" + team_list_text(teams) + "\n\nReply with number or name.")
+        return
+
+    # STEP FAV_TEAM ------------------------------------------------------------
+    if step == "FAV_TEAM":
+        teams  = s.get("teams", [])
+        team   = pick_team(text, teams)
+        league = s.get("fav_league")
+        if not team:
+            reply(user_id, "Not found. Reply 1-" + str(len(teams)) + " or team name.")
+            return
+        if user_id not in favorites:
+            favorites[user_id] = {}
+        favorites[user_id][league] = {"id": team["id"], "name": team["name"]}
+        s["step"] = "LEAGUE"
+        reply(user_id, team["name"] + " saved as your " + league.upper() + " favorite!")
+        return
+
+    # STEP MY_PICK -------------------------------------------------------------
+    if step == "MY_PICK":
+        my_favs = s.get("my_favs", [])
+        chosen  = None
+        try:
+            idx = int(tl) - 1
+            if 0 <= idx < len(my_favs):
+                chosen = my_favs[idx]
+        except ValueError:
+            for lg, team in my_favs:
+                if tl in team["name"].lower() or tl == lg:
+                    chosen = (lg, team)
+                    break
+        if not chosen:
+            reply(user_id, "Pick 1-" + str(len(my_favs)) + ".")
+            return
+        league, team   = chosen
+        s["league"]    = league
+        s["team_id"]   = team["id"]
+        s["team_name"] = team["name"]
+        s["step"]      = "CATEGORY"
+        reply(user_id, team["name"] + "\n" + CATEGORY_MENU)
+        return
+
+    # STEP 1: Choose League ----------------------------------------------------
     if step == "LEAGUE":
         league = LEAGUES.get(tl)
         if not league:
-            reply(user_id, f'"{text}" not recognized.\n\n{WELCOME}')
+            reply(user_id, '"' + text + '" not recognized.\n\n' + WELCOME)
             return
-
         s["league"] = league
         teams = espn.get_teams(league)
         if not teams:
             reply(user_id, "Couldn't load teams. Try again.\nText MENU to restart.")
             reset(user_id)
             return
-
         s["teams"] = teams
         s["step"]  = "TEAM"
-        reply(user_id, (
-            f"{league.upper()} - Choose a team:\n"
-            f"------------------\n"
-            f"{team_list_text(teams)}\n\n"
-            f"Reply with number or team name."
-        ))
+        reply(user_id, league.upper() + " - Choose a team:\n" + team_list_text(teams) + "\n\nReply with number or team name.")
 
-    # STEP 2: Choose Team
+    # STEP 2: Choose Team ------------------------------------------------------
     elif step == "TEAM":
         teams = s.get("teams", [])
         team  = pick_team(text, teams)
         if not team:
-            reply(user_id, f'"{text}" not found.\nReply 1-{len(teams)} or type team name.\nText MENU to restart.')
+            reply(user_id, '"' + text + '" not found.\nReply 1-' + str(len(teams)) + ' or type team name.\nText MENU to restart.')
             return
-
         s["team_id"]   = team["id"]
         s["team_name"] = team["name"]
         s["step"]      = "CATEGORY"
-        reply(user_id, f'{team["name"]} selected!\n------------------\n{CATEGORY_MENU}')
+        reply(user_id, team["name"] + "\n" + CATEGORY_MENU)
 
-    # STEP 3: Choose Category
+    # STEP 3: Choose Category --------------------------------------------------
     elif step == "CATEGORY":
         cat = CATEGORIES.get(tl)
         if not cat:
-            reply(user_id, f'"{text}" not recognized.\n\n{CATEGORY_MENU}')
+            reply(user_id, '"' + text + '" not recognized.\n\n' + CATEGORY_MENU)
             return
-
         league    = s["league"]
         team_id   = s["team_id"]
         team_name = s["team_name"]
 
-        # ESPN can be slow -- send a reminder if it takes over 10 seconds
         result_holder = [None]
         def fetch():
             result_holder[0] = espn.get_data(league, team_id, team_name, cat)
@@ -301,8 +344,7 @@ def handle_message(user_id, data):
         result = result_holder[0] or "Could not load data. Try again."
         s["step"] = "AGAIN"
         uname     = s.get("name", "Someone")
-        tag       = f"[{uname}]"
-        # Roster returns a list of messages; everything else returns a string
+        tag       = "[" + uname + "]"
         if isinstance(result, list):
             for i, msg in enumerate(result):
                 prefix = tag + "\n" if i == 0 else tag + " (cont.)\n"
@@ -311,39 +353,26 @@ def handle_message(user_id, data):
         else:
             reply(user_id, tag + "\n" + result + "\n\n" + AFTER_MENU)
 
-    # STEP 4: After results
+    # STEP 4: After results ----------------------------------------------------
     elif step == "AGAIN":
         if tl in ("1", "same", "same team", "more"):
             s["step"] = "CATEGORY"
-            reply(user_id, f'{s["team_name"]}\n------------------\n{CATEGORY_MENU}')
-
+            reply(user_id, s["team_name"] + "\n" + CATEGORY_MENU)
         elif tl in ("2", "new team", "team"):
             league = s["league"]
             teams  = s.get("teams", espn.get_teams(league))
             s["teams"] = teams
             s["step"]  = "TEAM"
-            reply(user_id, (
-                f"{league.upper()} - Pick a team:\n"
-                f"------------------\n"
-                f"{team_list_text(teams)}\n\n"
-                f"Reply with number or team name."
-            ))
-
+            reply(user_id, league.upper() + " - Pick a team:\n" + team_list_text(teams) + "\n\nReply with number or team name.")
         elif tl in ("3", "new league", "league"):
             reset(user_id)
             reply(user_id, WELCOME)
-
         else:
             reply(user_id, "Reply 1 (same team), 2 (new team),\n3 (new league) or text MENU.")
-
     else:
         reset(user_id)
         reply(user_id, WELCOME)
 
-
-
-# -- Health check --------------------------------------------------------------
-@app.route("/", methods=["GET"])
 def health():
     return "Sports Bot is running!", 200
 
