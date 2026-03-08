@@ -54,7 +54,7 @@ def get_scores(league, team_id, team_name):
     if not data:
         return f"Couldn't fetch scores for {team_name}."
 
-    lines = [f"SCORES: {team_name.upper()}", "------------------"]
+    lines = [f"SCORES: {team_name.upper()}"]
     found = 0
 
     for event in data.get("events", []):
@@ -214,7 +214,7 @@ def get_news(league, team_id, team_name):
             if articles:
                 break
 
-    lines = [f"NEWS: {team_name.upper()}", "------------------"]
+    lines = [f"NEWS: {team_name.upper()}"]
 
     if not articles:
         lines.append("No news found right now.")
@@ -255,22 +255,25 @@ def _parse_entries(entries, team_name, lines):
 
 
 def get_standings(league, team_id, team_name):
-    # Try multiple known ESPN standings endpoints
-    data = None
     sport, lg = SPORT_MAP[league]
+    # The correct ESPN standings endpoint is the v2 web API
+    data = None
     for endpoint in [
-        f"{BASE}/{sport}/{lg}/standings",
+        f"https://site.web.api.espn.com/apis/v2/sports/{sport}/{lg}/standings?season=2025&type=0",
         f"https://site.web.api.espn.com/apis/v2/sports/{sport}/{lg}/standings",
-        f"https://cdn.espn.com/core/{sport}/{lg}/standings?xhr=1",
+        f"https://cdn.espn.com/core/{sport}/{lg}/standings?xhr=1&render=false&device=desktop&userab=18",
+        f"https://site.api.espn.com/apis/v2/sports/{sport}/{lg}/standings",
     ]:
         data = safe_get(endpoint)
-        if data:
+        # Make sure we got real data, not just a fullViewLink stub
+        if data and (data.get("children") or data.get("standings") or data.get("groups")):
             break
+        data = None
 
     if not data:
         return f"Couldn't fetch standings for {league.upper()}."
 
-    lines = [f"STANDINGS: {league.upper()}", "------------------"]
+    lines = [f"STANDINGS: {league.upper()}"]
 
     def crawl(node, depth=0):
         name    = node.get("name", node.get("abbreviation", ""))
