@@ -204,7 +204,12 @@ def groupme_webhook():
         reply(user_id, f"Fetching {cat} for {team_name}...")
         result    = espn.get_data(league, team_id, team_name, cat)
         s["step"] = "AGAIN"
-        reply(user_id, result)
+        # Roster returns a list of messages; everything else returns a string
+        if isinstance(result, list):
+            for msg in result:
+                reply(user_id, msg)
+        else:
+            reply(user_id, result)
         reply(user_id, AFTER_MENU)
 
     # STEP 4: After results
