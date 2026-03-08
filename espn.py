@@ -287,19 +287,28 @@ def get_standings(league, team_id, team_name):
             for child in node.get(key, []):
                 crawl(child, depth + 1)
 
-    # Also check if data is wrapped in a "content" or "sports" key
-    root = data
-    for wrapper in ("content", "standings", "sports"):
-        if wrapper in data:
-            root = data[wrapper]
-            if isinstance(root, list):
-                root = root[0]
-            break
+    # Log top-level keys to group chat for debugging
+    top_keys = list(data.keys())
+    children  = data.get("children", [])
+    first_child_keys = list(children[0].keys()) if children else []
+    sub = children[0].get("children", []) if children else []
+    sub_keys = list(sub[0].keys()) if sub else []
 
-    crawl(root)
+    # Try every possible root
+    roots_to_try = [data]
+    for wrapper in ("content", "standings", "sports"):
+        val = data.get(wrapper)
+        if val:
+            roots_to_try.append(val[0] if isinstance(val, list) else val)
+
+    for root in roots_to_try:
+        crawl(root)
 
     if len(lines) <= 2:
-        lines.append("No standings data found.")
+        # Return debug info so we can see ESPN structure
+        lines.append(f"Debug - top keys: {top_keys}")
+        lines.append(f"Debug - child keys: {first_child_keys}")
+        lines.append(f"Debug - sub keys: {sub_keys}")
 
     return "\n".join(lines)
 
