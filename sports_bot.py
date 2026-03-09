@@ -350,6 +350,7 @@ def handle_message(user_id, data):
         team_id   = s["team_id"]
         team_name = s["team_name"]
 
+        s["step"] = "AGAIN"  # set immediately so user can reply while loading
         result_holder = [None]
         def fetch():
             result_holder[0] = espn.get_data(league, team_id, team_name, cat)
@@ -359,8 +360,7 @@ def handle_message(user_id, data):
         if t.is_alive():
             reply(user_id, "Still loading...")
             t.join(timeout=15)
-        result    = result_holder[0] or ["Could not load data. Try again."]
-        s["step"] = "AGAIN"
+        result = result_holder[0] or ["Could not load data. Try again."]
         uname     = s.get("name", "Someone")
         tag       = "[" + uname + "]"
         # First message gets the name tag
