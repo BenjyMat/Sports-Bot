@@ -254,8 +254,10 @@ def handle_message(user_id, data):
         reply(user_id, "\n".join(lines))
         return
 
-    s    = session(user_id)
-    step = s.get("step", "LEAGUE")
+    s         = session(user_id)
+    step      = s.get("step", "LEAGUE")
+    last_step = s.get("last_step", "")
+    s["last_step"] = step  # save before processing
 
     # STEP FAV_LEAGUE ----------------------------------------------------------
     if step == "FAV_LEAGUE":
@@ -342,6 +344,13 @@ def handle_message(user_id, data):
 
     # STEP 3: Choose Category --------------------------------------------------
     elif step == "CATEGORY":
+        # If they text a number >5 they probably meant the after menu - redirect
+        try:
+            if int(tl) > 5:
+                reply(user_id, "Pick 1-5:\n" + CATEGORY_MENU)
+                return
+        except ValueError:
+            pass
         cat = CATEGORIES.get(tl)
         if not cat:
             reply(user_id, '"' + text + '" not recognized.\n\n' + CATEGORY_MENU)
@@ -361,21 +370,34 @@ def handle_message(user_id, data):
             reply(user_id, "Still loading...")
             t.join(timeout=15)
         result = result_holder[0] or ["Could not load data. Try again."]
-        uname     = s.get("name", "Someone")
-        tag       = "[" + uname + "]"
-        # First message gets the name tag
-        for i, msg in enumerate(result):
-            if i > 0:
-                time.sleep(2)
-            if i == 0:
-                reply(user_id, tag + " " + msg)
+        uname  = s.get("name", "Someone")
+        tag    = "[" + uname + "]"
+
+        # Try to combine all msgs into as few texts as possible
+        NL = "\n"
+        combined = []
+        current  = tag
+        for msg in result:
+            candidate = (tag + " " + msg) if current == tag else (current + NL + msg)
+            if len(candidate) <= 155:
+                current = candidate
             else:
-                reply(user_id, msg)
-        time.sleep(2)
+                if current != tag:
+                    combined.append(current)
+                current = msg
+        if current and current != tag:
+            combined.append(current)
+
+        for i, msg in enumerate(combined):
+            if i > 0:
+                time.sleep(3)
+            reply(user_id, msg)
+        time.sleep(3)
         reply(user_id, AFTER_MENU)
 
     # STEP 4: After results ----------------------------------------------------
     elif step == "AGAIN":
+        # Always treat 1/2/3 as after-menu options, never as categories
         if tl in ("1", "same", "same team", "more"):
             s["step"] = "CATEGORY"
             reply(user_id, s["team_name"] + "\n" + CATEGORY_MENU)
