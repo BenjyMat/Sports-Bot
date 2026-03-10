@@ -110,7 +110,9 @@ def get_scores(league, team_id, team_name):
         else:
             game_date = event.get("date", "")
             try:
-                dt       = datetime.fromisoformat(game_date.replace("Z", "+00:00"))
+                from datetime import timezone, timedelta
+                EST      = timezone(timedelta(hours=-5))
+                dt       = datetime.fromisoformat(game_date.replace("Z", "+00:00")).astimezone(EST)
                 date_str = dt.strftime("%a %b %-d")
             except Exception:
                 date_str = "TBD"
@@ -145,8 +147,10 @@ def get_schedule(league, team_id, team_name):
                 opp_abbr  = t.get("team", {}).get("abbreviation", "OPP")
                 home_away = "vs" if t.get("homeAway") == "away" else "@"
         try:
-            dt       = datetime.fromisoformat(game_date.replace("Z", "+00:00"))
-            date_str = dt.strftime("%a %b %-d %-I:%M%p")
+            from datetime import timezone, timedelta
+            EST      = timezone(timedelta(hours=-5))
+            dt       = datetime.fromisoformat(game_date.replace("Z", "+00:00")).astimezone(EST)
+            date_str = dt.strftime("%a %b %-d %-I:%M%p ET")
         except Exception:
             date_str = "TBD"
         msgs.append(f"{date_str} {home_away} {opp_abbr}")
@@ -190,7 +194,7 @@ def get_roster(league, team_id, team_name):
         for player, group_pos in group:
             name   = player.get("displayName", player.get("fullName", "?"))
             # Use last name only to save space
-            lname  = name.split()[-1] if name else "?"
+            lname  = name if name else "?"
             pos    = player.get("position", {}).get("abbreviation", group_pos) if isinstance(player.get("position"), dict) else group_pos
             jersey = player.get("jersey", "")
             num_str = f"#{jersey}" if jersey else ""
@@ -227,7 +231,9 @@ def get_news(league, team_id, team_name):
         headline = article.get("headline", "No headline")
         pub      = article.get("published", "")
         try:
-            dt      = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+            from datetime import timezone, timedelta
+            EST     = timezone(timedelta(hours=-5))
+            dt      = datetime.fromisoformat(pub.replace("Z", "+00:00")).astimezone(EST)
             pub_str = dt.strftime("%b %-d")
         except Exception:
             pub_str = ""
@@ -256,6 +262,7 @@ def get_standings(league, team_id, team_name):
     sport, lg = SPORT_MAP[league]
     data = None
     for endpoint in [
+        f"https://site.web.api.espn.com/apis/v2/sports/{sport}/{lg}/standings?season=2026&type=0",
         f"https://site.web.api.espn.com/apis/v2/sports/{sport}/{lg}/standings?season=2025&type=0",
         f"https://site.web.api.espn.com/apis/v2/sports/{sport}/{lg}/standings",
         f"https://cdn.espn.com/core/{sport}/{lg}/standings?xhr=1&render=false&device=desktop&userab=18",
