@@ -1,6 +1,6 @@
 """
-espn.py -- ESPN Public API fetcher
-SMS optimized. EST times. All 4 leagues.
+espn.py -- ESPN Public API
+SMS optimized. EST times.
 """
 
 import requests
@@ -80,25 +80,25 @@ def _get_teams_raw(league):
     return sorted(teams, key=lambda x: x["name"])
 
 
-# -- Scores (team) -------------------------------------------------------------
+# -- Scores --------------------------------------------------------------------
 def get_scores(league, team_id, team_name):
     data = safe_get(sport_url(league, "/scoreboard"))
     if not data:
         return ["No scores found."]
-    msgs  = []
+    msgs = []
     for event in data.get("events", []):
         comp       = event.get("competitions", [{}])[0]
         teams_data = comp.get("competitors", [])
-        our        = next((t for t in teams_data if t.get("team", {}).get("id") == team_id), None)
-        opp        = next((t for t in teams_data if t.get("team", {}).get("id") != team_id), None)
+        our  = next((t for t in teams_data if t.get("team", {}).get("id") == team_id), None)
+        opp  = next((t for t in teams_data if t.get("team", {}).get("id") != team_id), None)
         if not our or not opp:
             continue
-        our_score  = our.get("score", "?")
-        opp_score  = opp.get("score", "?")
-        opp_abbr   = opp.get("team", {}).get("abbreviation", "OPP")
-        home_away  = "vs" if our.get("homeAway") == "home" else "@"
-        state      = event.get("status", {}).get("type", {}).get("state", "pre")
-        detail     = event.get("status", {}).get("type", {}).get("shortDetail", "")
+        our_score = our.get("score", "?")
+        opp_score = opp.get("score", "?")
+        opp_abbr  = opp.get("team", {}).get("abbreviation", "OPP")
+        home_away = "vs" if our.get("homeAway") == "home" else "@"
+        state     = event.get("status", {}).get("type", {}).get("state", "pre")
+        detail    = event.get("status", {}).get("type", {}).get("shortDetail", "")
         if state == "in":
             msgs.append("LIVE " + detail + ": " + our_score + "-" + opp_score + " " + home_away + " " + opp_abbr)
         elif state == "post":
@@ -109,7 +109,7 @@ def get_scores(league, team_id, team_name):
     return msgs or ["No games found for " + team_name + "."]
 
 
-# -- Score details (who scored) ------------------------------------------------
+# -- Score details -------------------------------------------------------------
 def get_score_details(league, team_id, team_name):
     data = safe_get(sport_url(league, "/scoreboard"))
     if not data:
@@ -124,19 +124,17 @@ def get_score_details(league, team_id, team_name):
         state = event.get("status", {}).get("type", {}).get("state", "pre")
         if state == "pre":
             continue
-        # Scoring plays
         plays = comp.get("scoringPlays", [])
         if plays:
             for play in plays:
-                period  = play.get("period", {}).get("displayValue", "")
-                clock   = play.get("clock", {}).get("displayValue", "")
-                text    = play.get("text", "")
-                score   = play.get("awayScore", "") + "-" + play.get("homeScore", "")
-                line    = period + " " + clock + " " + score + ": " + text
+                period = play.get("period", {}).get("displayValue", "")
+                clock  = play.get("clock", {}).get("displayValue", "")
+                text   = play.get("text", "")
+                score  = str(play.get("awayScore", "")) + "-" + str(play.get("homeScore", ""))
+                line   = period + " " + clock + " " + score + ": " + text
                 if len(line) > 155:
                     line = line[:152] + "..."
                 msgs.append(line)
-        # Leaders/stats
         leaders = our.get("leaders", [])
         for leader in leaders:
             cat   = leader.get("displayName", "")
@@ -154,7 +152,7 @@ def get_schedule(league, team_id, team_name):
     data = safe_get(sport_url(league, "/teams/" + team_id + "/schedule"))
     if not data:
         return ["No schedule found."]
-    msgs   = []
+    msgs = []
     for event in data.get("events", []):
         comp  = event.get("competitions", [{}])[0]
         state = comp.get("status", {}).get("type", {}).get("state", "pre")
@@ -196,9 +194,9 @@ def get_roster(league, team_id, team_name):
     for idx, group in enumerate(parts):
         lines = [team_name[:10] + " ROSTER " + str(idx+1) + "/" + str(total)]
         for player, group_pos in group:
-            name   = player.get("displayName", player.get("fullName", "?"))
-            pos    = player.get("position", {}).get("abbreviation", group_pos) if isinstance(player.get("position"), dict) else group_pos
-            jersey = player.get("jersey", "")
+            name    = player.get("displayName", player.get("fullName", "?"))
+            pos     = player.get("position", {}).get("abbreviation", group_pos) if isinstance(player.get("position"), dict) else group_pos
+            jersey  = player.get("jersey", "")
             num_str = "#" + jersey if jersey else ""
             pos_str = "(" + pos + ")" if pos else ""
             lines.append((num_str + " " + name + " " + pos_str).strip())
@@ -208,7 +206,6 @@ def get_roster(league, team_id, team_name):
 
 # -- News ----------------------------------------------------------------------
 def get_news(league, team_id, team_name):
-    sport, lg = SPORT_MAP[league]
     attempts = [
         (sport_url(league, "/teams/" + team_id + "/news"), None),
         (sport_url(league, "/news"), {"team": team_id}),
@@ -233,6 +230,181 @@ def get_news(league, team_id, team_name):
     return msgs
 
 
+# -- Injuries ------------------------------------------------------------------
+def get_injuries(league, team_id, team_name):
+    data = safe_get(sport_url(league, "/teams/" + team_id + "/injuries"))
+    if not data:
+        # Try alternate endpoint
+        data = safe_get(sport_url(league, "/injuries"), {"team": team_id})
+    if not data:
+        return ["No injury data found."]
+    injuries = data.get("injuries", data.get("items", []))
+    if not injuries:
+        return [team_name + ": No injuries reported."]
+    msgs = []
+    for inj in injuries[:10]:
+        athlete = inj.get("athlete", {})
+        name    = athlete.get("displayName", athlete.get("fullName", "?"))
+        status  = inj.get("status", inj.get("type", {}).get("description", "?"))
+        detail  = inj.get("details", {}).get("type", "")
+        line    = name + " - " + status
+        if detail:
+            line += " (" + detail + ")"
+        msgs.append(line)
+    return msgs or [team_name + ": No injuries reported."]
+
+
+# -- Transactions --------------------------------------------------------------
+def get_transactions(league, team_id, team_name):
+    sport, lg = SPORT_MAP[league]
+    data = safe_get(
+        "https://site.api.espn.com/apis/site/v2/sports/" + sport + "/" + lg + "/transactions",
+        {"team": team_id, "limit": 10}
+    )
+    if not data:
+        return ["No transaction data found."]
+    items = data.get("transactions", data.get("items", []))
+    if not items:
+        return [team_name + ": No recent transactions."]
+    msgs = []
+    for item in items[:8]:
+        date_str = fmt_date(item.get("date", ""))
+        desc     = item.get("description", item.get("headline", "?"))
+        if len(desc) > 130:
+            desc = desc[:127] + "..."
+        msgs.append((date_str + ": " + desc) if date_str else desc)
+    return msgs or [team_name + ": No recent transactions."]
+
+
+# -- Player lookup -------------------------------------------------------------
+def get_player(league, player_name):
+    sport, lg = SPORT_MAP[league]
+    data = safe_get(
+        BASE + "/" + sport + "/" + lg + "/athletes",
+        {"limit": 5, "search": player_name}
+    )
+    if not data:
+        return ["Player not found."]
+    athletes = data.get("items", data.get("athletes", []))
+    if not athletes:
+        return ["No player found matching: " + player_name]
+    player  = athletes[0]
+    name    = player.get("displayName", player.get("fullName", "?"))
+    pos     = player.get("position", {}).get("abbreviation", "")
+    team    = player.get("team", {}).get("displayName", "")
+    jersey  = player.get("jersey", "")
+    age     = str(player.get("age", ""))
+    pid     = player.get("id", "")
+    # Get stats
+    stats_data = safe_get(BASE + "/" + sport + "/" + lg + "/athletes/" + pid + "/statistics") if pid else None
+    msgs = []
+    header = name
+    if pos:
+        header += " " + pos
+    if team:
+        header += " | " + team
+    if jersey:
+        header += " #" + jersey
+    msgs.append(header)
+    if stats_data:
+        splits = stats_data.get("statistics", {}).get("splits", {}).get("categories", [])
+        for cat in splits[:3]:
+            cat_name = cat.get("displayName", "")
+            stat_lines = []
+            for stat in cat.get("stats", [])[:5]:
+                sname = stat.get("shortDisplayName", stat.get("displayName", ""))
+                sval  = stat.get("displayValue", "")
+                if sname and sval and sval != "0" and sval != "0.0":
+                    stat_lines.append(sname + ":" + sval)
+            if stat_lines:
+                msgs.append(cat_name + ": " + " ".join(stat_lines))
+    return msgs or [name + ": No stats available."]
+
+
+# -- Head to head --------------------------------------------------------------
+def get_head_to_head(league, team1_id, team1_name, team2_abbr):
+    data = safe_get(sport_url(league, "/scoreboard"))
+    if not data:
+        return ["No data found."]
+    # Look through past events for matchups
+    all_events = data.get("events", [])
+    results    = []
+    for event in all_events:
+        comp  = event.get("competitions", [{}])[0]
+        teams = comp.get("competitors", [])
+        ids   = [t.get("team", {}).get("id") for t in teams]
+        abbrs = [t.get("team", {}).get("abbreviation", "").lower() for t in teams]
+        if team1_id in ids and team2_abbr.lower() in abbrs:
+            state = event.get("status", {}).get("type", {}).get("state", "pre")
+            if state == "post":
+                our  = next((t for t in teams if t.get("team", {}).get("id") == team1_id), None)
+                opp  = next((t for t in teams if t.get("team", {}).get("abbreviation", "").lower() == team2_abbr.lower()), None)
+                if our and opp:
+                    our_score = our.get("score", "?")
+                    opp_score = opp.get("score", "?")
+                    icon      = "W" if int(our_score or 0) > int(opp_score or 0) else "L"
+                    date_str  = fmt_date(event.get("date", ""))
+                    results.append(date_str + " " + icon + " " + our_score + "-" + opp_score)
+    if not results:
+        return [team1_name + " vs " + team2_abbr.upper() + ": No recent matchups found."]
+    return [team1_name + " vs " + team2_abbr.upper() + ":"] + results
+
+
+# -- Home/Away record ----------------------------------------------------------
+def get_home_away(league, team_id, team_name):
+    data = safe_get(sport_url(league, "/teams/" + team_id + "/schedule"))
+    if not data:
+        return ["No data found."]
+    home_w = home_l = away_w = away_l = 0
+    for event in data.get("events", []):
+        comp  = event.get("competitions", [{}])[0]
+        state = comp.get("status", {}).get("type", {}).get("state", "pre")
+        if state != "post":
+            continue
+        our = next((t for t in comp.get("competitors", []) if t.get("team", {}).get("id") == team_id), None)
+        if not our:
+            continue
+        is_home = our.get("homeAway") == "home"
+        won     = our.get("winner", False)
+        if is_home:
+            if won: home_w += 1
+            else:   home_l += 1
+        else:
+            if won: away_w += 1
+            else:   away_l += 1
+    return [
+        team_name + " records:",
+        "Home: " + str(home_w) + "-" + str(home_l),
+        "Away: " + str(away_w) + "-" + str(away_l),
+    ]
+
+
+# -- Playoff bracket -----------------------------------------------------------
+def get_bracket(league):
+    sport, lg = SPORT_MAP[league]
+    data = safe_get(
+        "https://site.api.espn.com/apis/v2/sports/" + sport + "/" + lg + "/playoff-bracket"
+    )
+    if not data:
+        data = safe_get(WEBBASE + "/" + sport + "/" + lg + "/playoff-bracket")
+    if not data:
+        return ["No playoff bracket found."]
+    msgs   = []
+    rounds = data.get("rounds", data.get("bracket", {}).get("rounds", []))
+    for rnd in rounds:
+        rnd_name = rnd.get("name", rnd.get("displayName", "Round"))
+        msgs.append("-- " + rnd_name + " --")
+        for series in rnd.get("series", rnd.get("matchups", [])):
+            t1   = series.get("competitors", [{}])[0]
+            t2   = series.get("competitors", [{}])[1] if len(series.get("competitors", [])) > 1 else {}
+            n1   = t1.get("team", {}).get("abbreviation", "?")
+            n2   = t2.get("team", {}).get("abbreviation", "?")
+            w1   = str(t1.get("wins", 0))
+            w2   = str(t2.get("wins", 0))
+            msgs.append(n1 + "(" + w1 + ") vs " + n2 + "(" + w2 + ")")
+    return msgs or [league.upper() + " playoffs not available yet."]
+
+
 # -- Standings -----------------------------------------------------------------
 def get_standings(league, team_id, team_name):
     sport, lg = SPORT_MAP[league]
@@ -248,7 +420,6 @@ def get_standings(league, team_id, team_name):
         data = None
     if not data:
         return ["No standings found."]
-
     msgs = []
 
     def parse_entries(entries, section_name=""):
@@ -258,17 +429,16 @@ def get_standings(league, team_id, team_name):
             team  = entry.get("team", {}).get("displayName", "?")
             abbr  = entry.get("team", {}).get("abbreviation", team[:3].upper())
             stats = {s["name"]: s["displayValue"] for s in entry.get("stats", [])}
-
             if league == "nhl":
-                pts  = stats.get("points", stats.get("pts", "?"))
-                wins = stats.get("wins",   stats.get("w",   "?"))
-                loss = stats.get("losses", stats.get("l",   "?"))
-                otl  = stats.get("otLosses", stats.get("ot", stats.get("otl", "?")))
+                pts  = stats.get("points",  stats.get("pts", "?"))
+                wins = stats.get("wins",    stats.get("w",   "?"))
+                loss = stats.get("losses",  stats.get("l",   "?"))
+                otl  = stats.get("otLosses",stats.get("ot",  stats.get("otl", "?")))
                 mark = " <" if team_name.lower() in team.lower() else ""
                 msgs.append(abbr + ": " + str(pts) + "pts " + str(wins) + "-" + str(loss) + "-" + str(otl) + mark)
             else:
-                wins = stats.get("wins",   stats.get("w",   stats.get("W",   "?")))
-                loss = stats.get("losses", stats.get("l",   stats.get("L",   "?")))
+                wins = stats.get("wins",   stats.get("w", stats.get("W", "?")))
+                loss = stats.get("losses", stats.get("l", stats.get("L", "?")))
                 mark = " <" if team_name.lower() in team.lower() else ""
                 msgs.append(abbr + ": " + str(wins) + "-" + str(loss) + mark)
 
@@ -298,14 +468,11 @@ def get_standings(league, team_id, team_name):
     return msgs or ["No standings data found."]
 
 
-# -- League-wide data ----------------------------------------------------------
+# -- League-wide ---------------------------------------------------------------
 def get_league_data(league, category):
-    if category == "league_scores":
-        return get_league_scores(league)
-    elif category == "league_schedule":
-        return get_league_schedule(league)
-    elif category == "league_news":
-        return get_league_news(league)
+    if category == "league_scores":    return get_league_scores(league)
+    if category == "league_schedule":  return get_league_schedule(league)
+    if category == "league_news":      return get_league_news(league)
     return ["Unknown category."]
 
 def get_league_scores(league):
@@ -318,10 +485,10 @@ def get_league_scores(league):
         teams = comp.get("competitors", [])
         if len(teams) < 2:
             continue
-        home = next((t for t in teams if t.get("homeAway") == "home"), teams[0])
-        away = next((t for t in teams if t.get("homeAway") == "away"), teams[1])
-        h_abbr = home.get("team", {}).get("abbreviation", "?")
-        a_abbr = away.get("team", {}).get("abbreviation", "?")
+        home    = next((t for t in teams if t.get("homeAway") == "home"), teams[0])
+        away    = next((t for t in teams if t.get("homeAway") == "away"), teams[1])
+        h_abbr  = home.get("team", {}).get("abbreviation", "?")
+        a_abbr  = away.get("team", {}).get("abbreviation", "?")
         h_score = home.get("score", "")
         a_score = away.get("score", "")
         state   = event.get("status", {}).get("type", {}).get("state", "pre")
@@ -370,22 +537,45 @@ def get_league_news(league):
     return msgs or ["No news found."]
 
 
+# -- Check if game just ended (for alerts) ------------------------------------
+def check_game_finished(league, team_id):
+    """Returns final score string if team's game just ended, else None."""
+    data = safe_get(sport_url(league, "/scoreboard"))
+    if not data:
+        return None
+    for event in data.get("events", []):
+        comp       = event.get("competitions", [{}])[0]
+        teams_data = comp.get("competitors", [])
+        our = next((t for t in teams_data if t.get("team", {}).get("id") == team_id), None)
+        opp = next((t for t in teams_data if t.get("team", {}).get("id") != team_id), None)
+        if not our or not opp:
+            continue
+        state = event.get("status", {}).get("type", {}).get("state", "pre")
+        if state == "post":
+            our_score = our.get("score", "?")
+            opp_score = opp.get("score", "?")
+            opp_abbr  = opp.get("team", {}).get("abbreviation", "OPP")
+            home_away = "vs" if our.get("homeAway") == "home" else "@"
+            icon      = "W" if int(our_score or 0) > int(opp_score or 0) else "L"
+            team_name = our.get("team", {}).get("displayName", "Team")
+            return "FINAL: " + team_name + " " + icon + " " + our_score + "-" + opp_score + " " + home_away + " " + opp_abbr
+    return None
+
+
 # -- Dispatcher ----------------------------------------------------------------
 def get_data(league, team_id, team_name, category):
     key = league + "-" + team_id + "-" + category
     ttl = CACHE_SHORT if category in ("scores", "news") else CACHE_LONG
 
     def fetch():
-        if category == "scores":
-            return get_scores(league, team_id, team_name)
-        elif category == "schedule":
-            return get_schedule(league, team_id, team_name)
-        elif category == "roster":
-            return get_roster(league, team_id, team_name)
-        elif category == "news":
-            return get_news(league, team_id, team_name)
-        elif category == "standings":
-            return get_standings(league, team_id, team_name)
+        if category == "scores":       return get_scores(league, team_id, team_name)
+        if category == "schedule":     return get_schedule(league, team_id, team_name)
+        if category == "roster":       return get_roster(league, team_id, team_name)
+        if category == "news":         return get_news(league, team_id, team_name)
+        if category == "standings":    return get_standings(league, team_id, team_name)
+        if category == "injuries":     return get_injuries(league, team_id, team_name)
+        if category == "transactions": return get_transactions(league, team_id, team_name)
+        if category == "homeaway":     return get_home_away(league, team_id, team_name)
         return ["Unknown category."]
 
     return _cached(key, ttl, fetch)
