@@ -130,7 +130,12 @@ def send_results(user_id, result, s):
             time.sleep(3)
         reply(user_id, msg)
     time.sleep(3)
+    # Only send AFTER_MENU once per result batch
+    s["after_sent"] = _time_now()
     reply(user_id, AFTER_MENU)
+
+def _time_now():
+    return time.time()
 
 
 def session(uid):
@@ -143,11 +148,28 @@ def reset(uid):
 
 
 def team_list_text(teams):
-    lines = [str(i+1) + ". " + t["name"] for i, t in enumerate(teams)]
+    # Compact: number+abbrev per line to keep SMS short
+    lines = [str(i+1) + "." + t.get("abbrev", t["name"][:3].upper()) + " " + t["name"] for i, t in enumerate(teams)]
     if len(lines) > 16:
         mid = len(lines) // 2
-        return "\n".join(lines[:mid]) + "\n\n(cont.)\n" + "\n".join(lines[mid:])
+        return "\n".join(lines[:mid]) + "\n---\n" + "\n".join(lines[mid:])
     return "\n".join(lines)
+
+def team_abbrev_list(teams):
+    """Ultra-compact: just numbers and abbreviations, fits in 1-2 SMS"""
+    chunks = []
+    current = ""
+    for i, t in enumerate(teams):
+        abbrev = t.get("abbrev", t["name"][:3].upper())
+        entry  = str(i+1) + "." + abbrev + " "
+        if len(current) + len(entry) > 140:
+            chunks.append(current.strip())
+            current = entry
+        else:
+            current += entry
+    if current:
+        chunks.append(current.strip())
+    return chunks
 
 def pick_team(text, teams):
     t = text.strip().lower()
@@ -157,8 +179,13 @@ def pick_team(text, teams):
             return teams[idx]
     except ValueError:
         pass
+    # Exact abbrev match first
     for team in teams:
-        if t in team["name"].lower() or t == team.get("abbrev", "").lower():
+        if t == team.get("abbrev", "").lower():
+            return team
+    # Partial name match
+    for team in teams:
+        if t in team["name"].lower():
             return team
     return None
 
@@ -174,6 +201,85 @@ def run_fetch(fn, timeout=10):
         reply(None, "Still loading...")
         t.join(timeout=15)
     return holder[0]
+
+
+def parse_quick_command(text, all_teams_cache):
+    """
+    Parse a full one-line command like:
+    "nba lakers scores"
+    "nhl kings standings"
+    "mlb dodgers scores info"
+    Returns dict with keys: league, team, category, info
+    or None if not a quick command.
+    """
+    words = text.lower().split()
+    if len(words) < 2:
+        return None
+
+    result = {"league": None, "team": None, "category": None, "info": False}
+
+    # Check for "info" at the end
+    if words[-1] in ("info", "details", "more"):
+        result["info"] = True
+        words = words[:-1]
+
+    # Find league word
+    league_words = {"nhl": "nhl", "nba": "nba", "nfl": "nfl", "mlb": "mlb",
+                    "hockey": "nhl", "basketball": "nba", "football": "nfl", "baseball": "mlb"}
+    cat_words = {"scores": "scores", "score": "scores", "schedule": "schedule",
+                 "roster": "roster", "news": "news", "standings": "standings",
+                 "standing": "standings"}
+
+    for w in words:
+        if w in league_words:
+            result["league"] = league_words[w]
+        elif w in cat_words:
+            result["category"] = cat_words[w]
+
+    if not result["league"]:
+        return None
+
+    # Find team - remaining words after removing league/cat words
+    team_words = [w for w in words if w not in league_words and w not in cat_words]
+    if not team_words:
+        return None
+
+    # Look up team in that league
+    teams = all_teams_cache.get(result["league"]) or espn.get_teams(result["league"])
+    if teams:
+        all_teams_cache[result["league"]] = teams
+        team_query = " ".join(team_words)
+        team = None
+        # Try exact abbrev
+        for t in teams:
+            if team_query == t.get("abbrev", "").lower():
+                team = t
+                break
+        # Try partial name
+        if not team:
+            for t in teams:
+                if team_query in t["name"].lower():
+                    team = t
+                    break
+        # Try each word individually
+        if not team:
+            for word in team_words:
+                for t in teams:
+                    if word in t["name"].lower() or word == t.get("abbrev", "").lower():
+                        team = t
+                        break
+                if team:
+                    break
+        if team:
+            result["team"] = team
+
+    if not result["team"]:
+        return None
+
+    return result
+
+
+_teams_cache = {}
 
 
 @app.route("/groupme", methods=["POST"])
@@ -263,6 +369,41 @@ def handle_message(user_id, data):
             "3=new league"
         )
         return
+
+    # -- Quick command parser: "nba lakers scores" or "nhl kings standings info" --
+    if len(tl.split()) >= 2 and tl.split()[0] in ("nhl","nba","nfl","mlb","hockey","basketball","football","baseball"):
+        qc = parse_quick_command(tl, _teams_cache)
+        if qc and qc["team"]:
+            league    = qc["league"]
+            team      = qc["team"]
+            category  = qc["category"]
+            do_info   = qc["info"]
+            # Store in session
+            s["league"]    = league
+            s["team_id"]   = team["id"]
+            s["team_name"] = team["name"]
+            s["step"]      = "AGAIN"
+            if not category:
+                # No category given - just set team and ask
+                reply(user_id, team["name"] + "\n" + CATEGORY_MENU)
+                s["step"] = "CATEGORY"
+                return
+            # Fetch the data
+            result = run_fetch(lambda: espn.get_data(league, team["id"], team["name"], category))
+            result = result or ["Could not load data."]
+            send_results(user_id, result, s)
+            # If they also want info, fetch that too
+            if do_info and category == "scores":
+                time.sleep(2)
+                info = run_fetch(lambda: espn.get_score_details(league, team["id"], team["name"]))
+                info = info or ["No detail available."]
+                uname = s.get("name", "Someone")
+                tag   = "[" + uname + "]"
+                for i, msg in enumerate(info):
+                    if i > 0:
+                        time.sleep(2)
+                    reply(user_id, tag + " " + msg if i == 0 else msg)
+            return
 
     # FAV command
     if tl == "fav":
@@ -388,11 +529,14 @@ def handle_message(user_id, data):
             return
         s["teams"] = teams
         s["step"]  = "TEAM"
-        reply(user_id,
-            league.upper() + " teams:\n" +
-            team_list_text(teams) +
-            "\n\n0. Whole league view\nPick number or name."
-        )
+        # Send compact abbrev list first (fits in 1-2 SMS), then full names
+        abbrev_chunks = team_abbrev_list(teams)
+        for i, chunk in enumerate(abbrev_chunks):
+            if i > 0:
+                time.sleep(2)
+            reply(user_id, league.upper() + " teams:\n" + chunk if i == 0 else chunk)
+        time.sleep(2)
+        reply(user_id, "Type name, abbrev, or\nnumber. 0=league view.")
 
     # STEP 2: Team
     elif step == "TEAM":
@@ -452,11 +596,13 @@ def handle_message(user_id, data):
             teams  = s.get("teams", espn.get_teams(league))
             s["teams"] = teams
             s["step"]  = "TEAM"
-            reply(user_id,
-                league.upper() + " teams:\n" +
-                team_list_text(teams) +
-                "\n\n0. Whole league view\nPick number or name."
-            )
+            abbrev_chunks = team_abbrev_list(teams)
+            for i, chunk in enumerate(abbrev_chunks):
+                if i > 0:
+                    time.sleep(2)
+                reply(user_id, league.upper() + " teams:\n" + chunk if i == 0 else chunk)
+            time.sleep(2)
+            reply(user_id, "Type name, abbrev, or\nnumber. 0=league view.")
         elif tl in ("3", "new league", "league"):
             reset(user_id)
             reply(user_id, WELCOME)
