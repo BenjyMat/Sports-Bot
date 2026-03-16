@@ -348,12 +348,69 @@ def get_player(league, player_name):
                 msgs.append(cname + ": " + " ".join(stat_bits))
 
     if len(msgs) == 1:
-        msgs.append("Season stats unavailable.")
-        msgs.append("For game stats text:")
-        msgs.append(league + " " + found_team.split()[-1].lower() + " s")
-        msgs.append("then: info")
+        # Try balldontlie for NBA
+        if league == "nba":
+            bdl_msgs = get_balldontlie_stats(found_name)
+            if bdl_msgs:
+                msgs.extend(bdl_msgs)
+            else:
+                msgs.append("Stats unavailable.")
+        else:
+            msgs.append("Season stats unavailable.")
+            msgs.append("For game stats:")
+            msgs.append(league + " " + found_team.split()[-1].lower() + " s")
+            msgs.append("then: info")
 
     return msgs
+
+
+def get_balldontlie_stats(player_name):
+    """Fetch NBA season stats from balldontlie.io (free, no key needed for v1)."""
+    try:
+        # Search for player
+        search = safe_get(
+            "https://api.balldontlie.io/v1/players",
+            params={"search": player_name, "per_page": 1}
+        )
+        if not search:
+            return None
+        players = search.get("data", [])
+        if not players:
+            return None
+        p   = players[0]
+        pid = p.get("id")
+        if not pid:
+            return None
+
+        # Get current season averages
+        stats = safe_get(
+            "https://api.balldontlie.io/v1/season_averages",
+            params={"player_ids[]": pid, "season": 2024}
+        )
+        if not stats:
+            return None
+        avgs = stats.get("data", [])
+        if not avgs:
+            return None
+        a = avgs[0]
+        lines = []
+        gp  = a.get("games_played", "?")
+        pts = a.get("pts",  "?")
+        reb = a.get("reb",  "?")
+        ast = a.get("ast",  "?")
+        stl = a.get("stl",  "?")
+        blk = a.get("blk",  "?")
+        fg  = a.get("fg_pct",  "?")
+        fg3 = a.get("fg3_pct", "?")
+        ft  = a.get("ft_pct",  "?")
+        min_ = a.get("min", "?")
+        lines.append("2024-25 per game (" + str(gp) + " GP):")
+        lines.append("PTS:" + str(pts) + " REB:" + str(reb) + " AST:" + str(ast))
+        lines.append("STL:" + str(stl) + " BLK:" + str(blk) + " MIN:" + str(min_))
+        lines.append("FG:" + str(fg) + " 3P:" + str(fg3) + " FT:" + str(ft))
+        return lines
+    except Exception:
+        return None
 
 
 # -- Head to head --------------------------------------------------------------
