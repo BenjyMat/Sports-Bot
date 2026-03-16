@@ -40,6 +40,31 @@ CATEGORIES = {
     "home":"homeaway","away":"homeaway","record":"homeaway",
 }
 
+# Stat leader keywords
+LEADER_STATS = {
+    "points":"points","pts":"points",
+    "rebounds":"rebounds","reb":"rebounds",
+    "assists":"assists","ast":"assists",
+    "steals":"steals","stl":"steals",
+    "blocks":"blocks","blk":"blocks",
+    "goals":"goals","g":"goals",
+    "era":"era","avg":"avg","hr":"hr",
+    "rbi":"rbi","sb":"sb","wins":"wins",
+    "passing":"passing","rushing":"rushing",
+    "receiving":"receiving","td":"touchdowns",
+    "sacks":"sacks","strikeouts":"strikeouts",
+    "leaders":"points",  # default
+}
+
+# Odds keywords
+ODDS_TYPES = {
+    "championship":"championship","champ":"championship",
+    "odds":"championship","futures":"championship",
+    "mvp":"mvp","cup":"championship",
+    "superbowl":"championship","worldseries":"championship",
+    "stanleycup":"championship","awards":"mvp",
+}
+
 LEAGUE_CATS = {
     "1":"league_scores",   "scores":"league_scores",   "s":"league_scores",
     "2":"league_schedule", "schedule":"league_schedule","sc":"league_schedule",
@@ -647,12 +672,49 @@ def handle_message(user_id, data):
                 send_results(user_id, result, s)
                 return
 
+            # Stat leaders: "nba points leaders" or "nhl goals"
+            if qc.get("player") and not qc.get("team"):
+                player_query = qc["player"]
+                words_q      = player_query.lower().split()
+                # Check if it's actually a stat leaders request
+                stat_key  = None
+                odds_key  = None
+                for w in words_q:
+                    if w in LEADER_STATS:
+                        stat_key = LEADER_STATS[w]
+                    if w in ODDS_TYPES:
+                        odds_key = ODDS_TYPES[w]
+
+                if odds_key:
+                    result = run_fetch(lambda: espn.get_league_odds(league, odds_key))
+                    result = result or ["Odds not available."]
+                    s["step"]      = "AGAIN"
+                    s["team_name"] = league.upper() + " Odds"
+                    send_results(user_id, result, s)
+                    return
+
+                if stat_key or any(w in ("leaders","leader","top","best") for w in words_q):
+                    sk = stat_key or "points"
+                    result = run_fetch(lambda: espn.get_league_leaders(league, sk))
+                    result = result or ["Leaders not available."]
+                    s["step"]      = "AGAIN"
+                    s["team_name"] = league.upper() + " Leaders"
+                    send_results(user_id, result, s)
+                    return
+
             # Player lookup — check BEFORE league-wide
             if qc.get("player") and not qc.get("team"):
                 player = qc["player"]
                 reply(user_id, "Searching rosters...")
-                result = run_fetch(lambda: espn.get_player(league, player))
-                result = result or ["Player not found."]
+                # Use long timeout - scanning 30 rosters takes time
+                holder = [None]
+                def go():
+                    holder[0] = espn.get_player(league, player)
+                import threading as _t
+                pt = _t.Thread(target=go)
+                pt.start()
+                pt.join(timeout=60)
+                result = holder[0] or ["Player not found.\nTry last name only.\nEx: nba doncic"]
                 s["step"] = "AGAIN"
                 send_results(user_id, result, s)
                 return
