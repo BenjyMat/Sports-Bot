@@ -781,14 +781,16 @@ def get_nba_leaders_bdl(stat_type):
     }
     key = STAT_MAP.get(stat_type.lower(), "pts")
     BDL_KEY = os.environ.get("BALLDONTLIE_KEY","")
+    print("BDL leaders key present:", bool(BDL_KEY), flush=True)
     if not BDL_KEY:
-        return ["NBA leaders: add BALLDONTLIE_KEY to Render env vars."]
+        return ["NBA leaders: set BALLDONTLIE_KEY in Render."]
     try:
         data = safe_get(
             "https://api.balldontlie.io/v1/season_averages",
             params={"season": 2024, "per_page": 100},
             headers={"Authorization": BDL_KEY}
         )
+        print("BDL leaders data:", type(data), flush=True)
         if not data:
             return None
         players = sorted(
@@ -821,9 +823,8 @@ def get_nhl_leaders(stat_type="points"):
         "savepct":"savePctg","sv":"savePctg",
         "shutouts":"shutouts",
     }
-    cat = STAT_MAP.get(stat_type.lower(), "points")
+    cat = STAT_MAP.get(stat_type.lower(), stat_type.lower())
     try:
-        # NHL API - skater leaders
         import urllib.request, json as _json
         url = "https://api-web.nhle.com/v1/skater-stats-leaders/current?categories=" + cat + "&limit=10"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -929,8 +930,7 @@ def get_mlb_leaders(stat_type="homeRuns"):
 
 
 def get_nfl_leaders(stat_type="passing"):
-    """NFL stat leaders via Pro Football Reference API (no key)."""
-    # NFL season just ended - use 2024 season stats via ESPN
+    """NFL stat leaders - uses 2024 season (most recent completed)."""
     STAT_MAP = {
         "passing":"passing","passyards":"passing",
         "rushing":"rushing","rushyards":"rushing",
@@ -1000,17 +1000,22 @@ def get_odds(league, odds_type="championship"):
     if not sport_key:
         return [league.upper() + " odds not available."]
 
-    # The Odds API futures endpoint
-    odds_data = safe_get(
-        "https://api.the-odds-api.com/v4/sports/" + sport_key + "/odds",
-        params={
-            "apiKey": ODDS_KEY,
-            "regions": "us",
-            "markets": "outrights",
-            "oddsFormat": "american",
-        }
-    )
-    print("Odds API:", sport_key, "result:", type(odds_data), len(odds_data) if isinstance(odds_data, list) else odds_data, flush=True)
+    # Try both the specific futures key and the general sport key
+    keys_to_try = [sport_key, sport_key.replace("_super_bowl_winner","").replace("_championship_winner","").replace("_world_series_winner","")]
+    odds_data = None
+    for sk in keys_to_try:
+        odds_data = safe_get(
+            "https://api.the-odds-api.com/v4/sports/" + sk + "/odds",
+            params={
+                "apiKey": ODDS_KEY,
+                "regions": "us",
+                "markets": "outrights",
+                "oddsFormat": "american",
+            }
+        )
+        print("Odds API:", sk, "result:", type(odds_data), len(odds_data) if isinstance(odds_data, list) else odds_data, flush=True)
+        if odds_data and isinstance(odds_data, list) and len(odds_data) > 0:
+            break
 
     if odds_data and isinstance(odds_data, list) and len(odds_data) > 0:
         msgs = [league.upper() + " " + odds_type.title() + " Odds:"]
@@ -1030,6 +1035,8 @@ def get_odds(league, odds_type="championship"):
         if len(msgs) > 1:
             return msgs
 
+    if league == "nfl":
+        return ["NFL Super Bowl odds not available.", "Try during the season (Sep-Feb)."]
     return [league.upper() + " odds not available right now."]
 
 
