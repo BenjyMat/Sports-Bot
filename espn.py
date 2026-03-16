@@ -38,9 +38,10 @@ def sport_url(league, path=""):
     sport, lg = SPORT_MAP[league]
     return BASE + "/" + sport + "/" + lg + path
 
-def safe_get(endpoint, params=None):
+def safe_get(endpoint, params=None, timeout_override=None):
     try:
-        r = requests.get(endpoint, params=params, timeout=TIMEOUT)
+        t = timeout_override if timeout_override else TIMEOUT
+        r = requests.get(endpoint, params=params, timeout=t)
         r.raise_for_status()
         return r.json()
     except Exception:
@@ -290,9 +291,9 @@ def get_player(league, player_name):
     found_jer  = None
     found_team = None
 
-    # Step 1: Find player in rosters
+    # Step 1: Find player in rosters - use short timeout per request
     for team in teams:
-        data = safe_get(sport_url(league, "/teams/" + team["id"] + "/roster"))
+        data = safe_get(sport_url(league, "/teams/" + team["id"] + "/roster"), timeout_override=5)
         if not data:
             continue
         athletes = data.get("athletes", [])
