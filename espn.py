@@ -325,75 +325,33 @@ def get_player(league, player_name):
     header += " | " + found_team
     msgs = [header]
 
-    # Step 2: Get stats from athlete overview (most reliable free endpoint)
-    overview_urls = [
-        "https://site.web.api.espn.com/apis/common/v3/sports/" + sport + "/" + lg + "/athletes/" + found_pid + "/overview",
-        "https://site.web.api.espn.com/apis/common/v3/sports/" + sport + "/" + lg + "/athletes/" + found_pid + "/stats",
+    # Try one fast stat call only
+    sdata = safe_get(
         BASE + "/" + sport + "/" + lg + "/athletes/" + found_pid + "/statistics/0",
-        BASE + "/" + sport + "/" + lg + "/athletes/" + found_pid + "/statistics",
-    ]
+        timeout_override=5
+    )
+    if sdata:
+        cats = []
+        if sdata.get("statistics", {}).get("splits", {}).get("categories"):
+            cats = sdata["statistics"]["splits"]["categories"]
+        elif sdata.get("splits", {}).get("categories"):
+            cats = sdata["splits"]["categories"]
+        for cat in cats[:3]:
+            stat_bits = []
+            for stat in cat.get("stats", [])[:8]:
+                sname = stat.get("shortDisplayName") or stat.get("abbreviation") or ""
+                sval  = str(stat.get("displayValue") or stat.get("value") or "")
+                if sname and sval and sval not in ("0","0.0","--","","null"):
+                    stat_bits.append(sname + ":" + sval)
+            if stat_bits:
+                cname = cat.get("displayName") or cat.get("name") or ""
+                msgs.append(cname + ": " + " ".join(stat_bits))
 
-    stats_found = False
-    for url in overview_urls:
-        data = safe_get(url)
-        if not data:
-            continue
-
-        # Try to find stats in various shapes
-        def extract_stat_lines(node):
-            lines = []
-            if isinstance(node, dict):
-                cats = (node.get("statistics") or {}).get("splits", {}).get("categories") or                        node.get("splits", {}).get("categories") or                        node.get("categories") or []
-                for cat in cats[:4]:
-                    stat_bits = []
-                    for stat in cat.get("stats", [])[:10]:
-                        sname = stat.get("shortDisplayName") or stat.get("abbreviation") or stat.get("displayName","")
-                        sval  = str(stat.get("displayValue") or stat.get("value") or "")
-                        if sname and sval and sval not in ("0","0.0","--","","null"):
-                            stat_bits.append(sname + ":" + sval)
-                    if stat_bits:
-                        cname = cat.get("displayName") or cat.get("name") or ""
-                        lines.append(cname + ": " + " ".join(stat_bits))
-            return lines
-
-        stat_lines = extract_stat_lines(data)
-
-        # Also check nested keys
-        if not stat_lines:
-            for key in ("athlete","player","statistics","stats","overview"):
-                sub = data.get(key)
-                if sub:
-                    stat_lines = extract_stat_lines(sub if isinstance(sub, dict) else {})
-                    if stat_lines:
-                        break
-
-        if stat_lines:
-            msgs.extend(stat_lines)
-            stats_found = True
-            break
-
-    # Step 3: If still no stats, pull from recent game leaders as fallback
-    if not stats_found:
-        sboard = safe_get(sport_url(league, "/scoreboard"))
-        if sboard:
-            for event in sboard.get("events", []):
-                comp = event.get("competitions", [{}])[0]
-                for competitor in comp.get("competitors", []):
-                    if competitor.get("team", {}).get("displayName","") == found_team:
-                        for leader_cat in competitor.get("leaders", []):
-                            for leader in leader_cat.get("leaders", []):
-                                aname = leader.get("athlete", {}).get("displayName","")
-                                if found_name.lower() in aname.lower():
-                                    cat_name = leader_cat.get("displayName","")
-                                    val      = leader.get("displayValue","")
-                                    if cat_name and val:
-                                        msgs.append(cat_name + ": " + val)
-                                        stats_found = True
-
-    if not stats_found:
-        msgs.append("Season stats not available.")
-        msgs.append("Try: nba lakers scores")
-        msgs.append("then: info (for game leaders)")
+    if len(msgs) == 1:
+        msgs.append("Season stats unavailable.")
+        msgs.append("For game stats text:")
+        msgs.append(league + " " + found_team.split()[-1].lower() + " s")
+        msgs.append("then: info")
 
     return msgs
 
