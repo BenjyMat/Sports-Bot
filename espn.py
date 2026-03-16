@@ -985,107 +985,52 @@ def get_nfl_leaders(stat_type="passing"):
 def get_odds(league, odds_type="championship"):
     sport, lg = SPORT_MAP[league]
 
-    ODDS_ENDPOINTS = [
-        "https://sports.core.api.espn.com/v2/sports/" + sport + "/leagues/" + lg + "/odds",
-        "https://sports.core.api.espn.com/v2/sports/" + sport + "/leagues/" + lg + "/futures",
-        "https://site.web.api.espn.com/apis/v2/sports/" + sport + "/" + lg + "/futures",
-    ]
-
-    AWARD_NAMES = {
-        "nba": ["NBA Championship","MVP","Rookie of the Year","Defensive Player","6th Man"],
-        "nhl": ["Stanley Cup","Hart Trophy","Norris Trophy","Vezina Trophy","Calder Trophy"],
-        "nfl": ["Super Bowl","NFL MVP","Offensive Player","Defensive Player","OROY","DROY"],
-        "mlb": ["World Series","AL MVP","NL MVP","AL Cy Young","NL Cy Young","AL ROY","NL ROY"],
+    SPORT_KEYS = {
+        "nhl": "icehockey_nhl_championship_winner",
+        "nba": "basketball_nba_championship_winner",
+        "nfl": "americanfootball_nfl_super_bowl_winner",
+        "mlb": "baseball_mlb_world_series_winner",
     }
 
-    # Try ESPN odds endpoints
-    for endpoint in ODDS_ENDPOINTS:
-        data = safe_get(endpoint)
-        print("ODDS endpoint:", endpoint, "keys:", list(data.keys()) if data else "None", flush=True)
-        if not data:
-            continue
-        items = data.get("items", data.get("futures", data.get("odds", [])))
-        print("ODDS items count:", len(items) if items else 0, flush=True)
-        if not items:
-            continue
+    ODDS_KEY = os.environ.get("ODDS_API_KEY","")
+    if not ODDS_KEY:
+        return [league.upper() + " odds: add ODDS_API_KEY to Render env vars."]
+
+    sport_key = SPORT_KEYS.get(league)
+    if not sport_key:
+        return [league.upper() + " odds not available."]
+
+    # The Odds API futures endpoint
+    odds_data = safe_get(
+        "https://api.the-odds-api.com/v4/sports/" + sport_key + "/odds",
+        params={
+            "apiKey": ODDS_KEY,
+            "regions": "us",
+            "markets": "outrights",
+            "oddsFormat": "american",
+        }
+    )
+    print("Odds API:", sport_key, "result:", type(odds_data), len(odds_data) if isinstance(odds_data, list) else odds_data, flush=True)
+
+    if odds_data and isinstance(odds_data, list) and len(odds_data) > 0:
         msgs = [league.upper() + " " + odds_type.title() + " Odds:"]
-        count = 0
-        for item in items[:5]:
-            name    = item.get("name", item.get("displayName","?"))
-            details = item.get("details", [])
-            if details:
-                for detail in details[:8]:
-                    team  = detail.get("team", {}).get("displayName", detail.get("name","?"))
-                    price = detail.get("price", {})
-                    odds  = price.get("displayOdds", price.get("americanOdds","?"))
-                    msgs.append(team + ": " + str(odds))
-                    count += 1
-                    if count >= 10:
-                        break
-            if count >= 10:
-                break
+        seen = {}
+        for event in odds_data:
+            for bookmaker in event.get("bookmakers", [])[:1]:
+                for market in bookmaker.get("markets", []):
+                    for outcome in market.get("outcomes", []):
+                        name  = outcome.get("name","?")
+                        price = outcome.get("price","?")
+                        if name not in seen:
+                            seen[name] = price
+        sorted_odds = sorted(seen.items(), key=lambda x: float(x[1]) if isinstance(x[1],(int,float)) else 9999)
+        for name, price in sorted_odds[:12]:
+            prefix = "+" if isinstance(price,(int,float)) and price > 0 else ""
+            msgs.append(name + ": " + prefix + str(price))
         if len(msgs) > 1:
             return msgs
 
-    # Fallback: use The Odds API (free tier, 500 requests/month)
-    SPORT_KEYS = {
-        "nhl": "icehockey_nhl",
-        "nba": "basketball_nba",
-        "nfl": "americanfootball_nfl",
-        "mlb": "baseball_mlb",
-    }
-    MARKET_KEYS = {
-        "championship": "outrights",
-        "mvp":          "outrights",
-        "futures":      "outrights",
-    }
-    sport_key  = SPORT_KEYS.get(league)
-    market_key = MARKET_KEYS.get(odds_type.lower(), "outrights")
-
-    if sport_key:
-        ODDS_KEY = os.environ.get("ODDS_API_KEY","")
-        if not ODDS_KEY:
-            return [league.upper() + " odds: add ODDS_API_KEY to Render env vars."]
-        odds_data = safe_get(
-            "https://api.the-odds-api.com/v4/sports/" + sport_key + "/events/" + sport_key + "/odds",
-            params={
-                "apiKey": ODDS_KEY,
-                "regions": "us",
-                "markets": "outrights",
-                "oddsFormat": "american",
-            }
-        )
-        if not odds_data:
-            odds_data = safe_get(
-                "https://api.the-odds-api.com/v4/sports/" + sport_key + "/odds",
-                params={
-                    "apiKey": ODDS_KEY,
-                    "regions": "us",
-                    "markets": "outrights",
-                    "oddsFormat": "american",
-                }
-            )
-        print("Odds API result type:", type(odds_data), flush=True)
-        if odds_data and isinstance(odds_data, list):
-            msgs    = [league.upper() + " " + odds_type.title() + " Odds:"]
-            seen    = {}
-            for game in odds_data:
-                for bookmaker in game.get("bookmakers", [])[:1]:
-                    for market in bookmaker.get("markets", []):
-                        for outcome in market.get("outcomes", []):
-                            name  = outcome.get("name","?")
-                            price = outcome.get("price","?")
-                            if name not in seen:
-                                seen[name] = price
-            sorted_odds = sorted(seen.items(), key=lambda x: x[1])
-            for name, price in sorted_odds[:12]:
-                prefix = "+" if isinstance(price, (int,float)) and price > 0 else ""
-                msgs.append(name + ": " + prefix + str(price))
-            if len(msgs) > 1:
-                return msgs
-
-    award_list = AWARD_NAMES.get(league, [])
-    return [league.upper() + " odds not available.", "Awards: " + ", ".join(award_list) if award_list else ""]
+    return [league.upper() + " odds not available right now."]
 
 
 # -- Dispatcher ----------------------------------------------------------------
