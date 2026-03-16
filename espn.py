@@ -307,20 +307,39 @@ def get_player(league, player_name):
                 if jersey: header += " #" + jersey
                 header += " | " + team["name"]
                 msgs = [header]
-                # Try to get stats
+                # Try multiple stat endpoints
                 if pid:
-                    sdata = safe_get(BASE + "/" + sport + "/" + lg + "/athletes/" + pid + "/statistics")
-                    if sdata:
-                        cats = sdata.get("statistics", {}).get("splits", {}).get("categories", [])
-                        for cat in cats[:2]:
+                    stat_urls = [
+                        BASE + "/" + sport + "/" + lg + "/athletes/" + pid + "/statistics",
+                        BASE + "/" + sport + "/" + lg + "/athletes/" + pid + "/statistics/0",
+                        "https://site.web.api.espn.com/apis/common/v3/sports/" + sport + "/" + lg + "/athletes/" + pid + "/stats",
+                    ]
+                    for surl in stat_urls:
+                        sdata = safe_get(surl)
+                        if not sdata:
+                            continue
+                        # Try different response shapes
+                        cats = []
+                        if sdata.get("statistics", {}).get("splits", {}).get("categories"):
+                            cats = sdata["statistics"]["splits"]["categories"]
+                        elif sdata.get("splits", {}).get("categories"):
+                            cats = sdata["splits"]["categories"]
+                        elif sdata.get("categories"):
+                            cats = sdata["categories"]
+
+                        for cat in cats[:3]:
                             stat_lines = []
-                            for stat in cat.get("stats", [])[:6]:
-                                sname = stat.get("shortDisplayName", "")
-                                sval  = stat.get("displayValue", "")
-                                if sname and sval and sval not in ("0","0.0","--"):
+                            for stat in cat.get("stats", [])[:8]:
+                                sname = stat.get("shortDisplayName", stat.get("abbreviation", stat.get("displayName","")))
+                                sval  = stat.get("displayValue", stat.get("value",""))
+                                sval  = str(sval)
+                                if sname and sval and sval not in ("0","0.0","--",""):
                                     stat_lines.append(sname + ":" + sval)
                             if stat_lines:
-                                msgs.append(" ".join(stat_lines))
+                                cname = cat.get("displayName", cat.get("name",""))
+                                msgs.append(cname + ": " + " ".join(stat_lines))
+                        if len(msgs) > 1:
+                            break
                 return msgs
     return ["Player not found: " + player_name, "Try searching by last name."]
 
