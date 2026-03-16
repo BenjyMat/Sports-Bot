@@ -383,9 +383,10 @@ def get_balldontlie_stats(player_name):
     try:
         search = safe_get(
             "https://api.balldontlie.io/v1/players",
-            params={"search": player_name, "per_page": 1},
+            params={"search": player_name, "per_page": 5},
             headers={"Authorization": BDL_KEY}
         )
+        print("BDL player search:", player_name, type(search), search.get("data") if search else None, flush=True)
         if not search:
             return None
         players = search.get("data", [])
@@ -399,9 +400,10 @@ def get_balldontlie_stats(player_name):
         # Get current season averages
         stats = safe_get(
             "https://api.balldontlie.io/v1/season_averages",
-            params={"player_ids[]": pid, "season": 2024},
+            params={"player_ids[]": pid, "season": 2024, "season_type": "regular"},
             headers={"Authorization": BDL_KEY}
         )
+        print("BDL stats for pid", pid, ":", type(stats), stats.get("data") if stats else None, flush=True)
         if not stats:
             return None
         avgs = stats.get("data", [])
@@ -785,29 +787,45 @@ def get_nba_leaders_bdl(stat_type):
     if not BDL_KEY:
         return ["NBA leaders: set BALLDONTLIE_KEY in Render."]
     try:
+        # Get all players first, then fetch their averages
+        # Use the stats endpoint with season filter
         data = safe_get(
-            "https://api.balldontlie.io/v1/season_averages",
-            params={"season": 2024, "per_page": 100},
+            "https://api.balldontlie.io/v1/stats",
+            params={
+                "seasons[]": 2024,
+                "per_page": 25,
+                "postseason": "false",
+            },
             headers={"Authorization": BDL_KEY}
         )
-        print("BDL leaders data:", type(data), flush=True)
-        if not data:
+        print("BDL leaders data:", type(data), data.get("data",[])[0] if data and data.get("data") else "empty", flush=True)
+        if not data or not data.get("data"):
             return None
-        players = sorted(
-            [p for p in data.get("data",[]) if p.get(key) is not None],
-            key=lambda x: float(x.get(key,0)),
-            reverse=True
-        )[:10]
-        if not players:
+        # Aggregate by player
+        player_stats = {}
+        for game in data.get("data",[]):
+            p = game.get("player",{})
+            pid = p.get("id")
+            if not pid:
+                continue
+            if pid not in player_stats:
+                player_stats[pid] = {"name": p.get("last_name","?") + " " + (p.get("first_name","?") or "?")[0],
+                                      "team": game.get("team",{}).get("abbreviation",""),
+                                      "vals": [], "games": 0}
+            val = game.get(key)
+            if val is not None:
+                player_stats[pid]["vals"].append(float(val))
+                player_stats[pid]["games"] += 1
+        ranked = sorted(player_stats.values(), key=lambda x: sum(x["vals"])/len(x["vals"]) if x["vals"] else 0, reverse=True)[:10]
+        if not ranked:
             return None
         msgs = ["NBA " + key.upper() + " leaders:"]
-        for i, p in enumerate(players, 1):
-            name = p.get("player",{}).get("last_name","?") + " " + p.get("player",{}).get("first_name","?")[0]
-            team = p.get("team",{}).get("abbreviation","")
-            val  = p.get(key,"?")
-            msgs.append(str(i) + ". " + name + " (" + team + "): " + str(val))
+        for i, p in enumerate(ranked, 1):
+            avg = sum(p["vals"])/len(p["vals"]) if p["vals"] else 0
+            msgs.append(str(i) + ". " + p["name"] + " (" + p["team"] + "): " + str(round(avg,1)))
         return msgs
-    except Exception:
+    except Exception as e:
+        print("BDL leaders error:", e, flush=True)
         return None
 
 
@@ -826,35 +844,43 @@ def get_nhl_leaders(stat_type="points"):
     cat = STAT_MAP.get(stat_type.lower(), stat_type.lower())
     try:
         import urllib.request, json as _json
-        url = "https://api-web.nhle.com/v1/skater-stats-leaders/current?categories=" + cat + "&limit=10"
+        # Request points,goals,assists all at once
+        all_cats = "points,goals,assists,plusMinus,goalsAgainstAverage,savePctg,wins"
+        url = "https://api-web.nhle.com/v1/skater-stats-leaders/current?categories=" + all_cats + "&limit=10"
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = _json.loads(resp.read().decode())
         print("NHL leaders data keys:", list(data.keys()) if isinstance(data, dict) else type(data), flush=True)
-        if isinstance(data, dict) and cat in data:
-            leaders = data[cat]
-            msgs = ["NHL " + cat + " leaders:"]
-            for i, p in enumerate(leaders[:10], 1):
-                fname = p.get("firstName",{}).get("default","") if isinstance(p.get("firstName"), dict) else str(p.get("firstName",""))
-                lname = p.get("lastName",{}).get("default","") if isinstance(p.get("lastName"), dict) else str(p.get("lastName",""))
-                tobj  = p.get("teamAbbrev",{})
-                team  = tobj.get("default","") if isinstance(tobj, dict) else str(tobj)
-                val   = p.get("value", p.get(cat,"?"))
-                msgs.append(str(i) + ". " + fname + " " + lname + " (" + team + "): " + str(val))
-            return msgs
-        # Try all keys to find leaders
-        if isinstance(data, dict):
-            for k, v in data.items():
-                if isinstance(v, list) and len(v) > 0:
-                    msgs = ["NHL " + k + " leaders:"]
-                    for i, p in enumerate(v[:10], 1):
-                        fname = p.get("firstName",{}).get("default","") if isinstance(p.get("firstName"), dict) else str(p.get("firstName",""))
-                        lname = p.get("lastName",{}).get("default","") if isinstance(p.get("lastName"), dict) else str(p.get("lastName",""))
-                        tobj  = p.get("teamAbbrev",{})
-                        team  = tobj.get("default","") if isinstance(tobj, dict) else str(tobj)
-                        val   = p.get("value","?")
-                        msgs.append(str(i) + ". " + fname + " " + lname + " (" + team + "): " + str(val))
-                    return msgs
+        if not isinstance(data, dict):
+            return None
+        # Find the right category
+        target = cat
+        if target not in data:
+            # Try goalie endpoint for goalie stats
+            if cat in ("goalsAgainstAverage","savePctg","wins","shutouts"):
+                url2 = "https://api-web.nhle.com/v1/goalie-stats-leaders/current?categories=" + all_cats + "&limit=10"
+                req2 = urllib.request.Request(url2, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req2, timeout=10) as resp2:
+                    data2 = _json.loads(resp2.read().decode())
+                if isinstance(data2, dict) and cat in data2:
+                    data = data2
+                    target = cat
+            if target not in data:
+                # Fall back to points
+                target = "points"
+        leaders = data.get(target, [])
+        if not leaders:
+            return None
+        label = target.replace("PerGame","").replace("Per","")
+        msgs = ["NHL " + label + " leaders:"]
+        for i, p in enumerate(leaders[:10], 1):
+            fname = p.get("firstName",{}).get("default","") if isinstance(p.get("firstName"),dict) else str(p.get("firstName",""))
+            lname = p.get("lastName",{}).get("default","") if isinstance(p.get("lastName"),dict) else str(p.get("lastName",""))
+            tobj  = p.get("teamAbbrev",{})
+            team  = tobj.get("default","") if isinstance(tobj,dict) else str(tobj)
+            val   = p.get("value", p.get(target,"?"))
+            msgs.append(str(i) + ". " + fname + " " + lname + " (" + team + "): " + str(val))
+        return msgs
     except Exception as e:
         print("NHL leaders error:", e, flush=True)
     return None
