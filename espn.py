@@ -276,14 +276,21 @@ def get_transactions(league, team_id, team_name):
     return msgs or [team_name + ": No recent transactions."]
 
 
-# -- Player lookup (searches all team rosters) --------------------------------
+# -- Player lookup (searches all team rosters + athlete overview) -------------
 def get_player(league, player_name):
-    """Search for a player by scanning all team rosters."""
     sport, lg = SPORT_MAP[league]
     query = player_name.lower().strip()
     teams = _get_teams_raw(league)
     if not teams:
         return ["Could not load teams."]
+
+    found_pid  = None
+    found_name = None
+    found_pos  = None
+    found_jer  = None
+    found_team = None
+
+    # Step 1: Find player in rosters
     for team in teams:
         data = safe_get(sport_url(league, "/teams/" + team["id"] + "/roster"))
         if not data:
@@ -299,49 +306,95 @@ def get_player(league, player_name):
         for player in players:
             name = player.get("displayName", player.get("fullName", ""))
             if query in name.lower():
-                pos    = player.get("position", {}).get("abbreviation", "") if isinstance(player.get("position"), dict) else ""
-                jersey = player.get("jersey", "")
-                pid    = player.get("id", "")
-                header = name
-                if pos:    header += " (" + pos + ")"
-                if jersey: header += " #" + jersey
-                header += " | " + team["name"]
-                msgs = [header]
-                # Try multiple stat endpoints
-                if pid:
-                    stat_urls = [
-                        BASE + "/" + sport + "/" + lg + "/athletes/" + pid + "/statistics",
-                        BASE + "/" + sport + "/" + lg + "/athletes/" + pid + "/statistics/0",
-                        "https://site.web.api.espn.com/apis/common/v3/sports/" + sport + "/" + lg + "/athletes/" + pid + "/stats",
-                    ]
-                    for surl in stat_urls:
-                        sdata = safe_get(surl)
-                        if not sdata:
-                            continue
-                        # Try different response shapes
-                        cats = []
-                        if sdata.get("statistics", {}).get("splits", {}).get("categories"):
-                            cats = sdata["statistics"]["splits"]["categories"]
-                        elif sdata.get("splits", {}).get("categories"):
-                            cats = sdata["splits"]["categories"]
-                        elif sdata.get("categories"):
-                            cats = sdata["categories"]
+                found_pid  = player.get("id", "")
+                found_name = name
+                found_pos  = player.get("position", {}).get("abbreviation", "") if isinstance(player.get("position"), dict) else ""
+                found_jer  = player.get("jersey", "")
+                found_team = team["name"]
+                break
+        if found_pid:
+            break
 
-                        for cat in cats[:3]:
-                            stat_lines = []
-                            for stat in cat.get("stats", [])[:8]:
-                                sname = stat.get("shortDisplayName", stat.get("abbreviation", stat.get("displayName","")))
-                                sval  = stat.get("displayValue", stat.get("value",""))
-                                sval  = str(sval)
-                                if sname and sval and sval not in ("0","0.0","--",""):
-                                    stat_lines.append(sname + ":" + sval)
-                            if stat_lines:
-                                cname = cat.get("displayName", cat.get("name",""))
-                                msgs.append(cname + ": " + " ".join(stat_lines))
-                        if len(msgs) > 1:
-                            break
-                return msgs
-    return ["Player not found: " + player_name, "Try searching by last name."]
+    if not found_pid:
+        return ["Player not found: " + player_name, "Try last name only."]
+
+    header = found_name
+    if found_pos: header += " (" + found_pos + ")"
+    if found_jer: header += " #" + found_jer
+    header += " | " + found_team
+    msgs = [header]
+
+    # Step 2: Get stats from athlete overview (most reliable free endpoint)
+    overview_urls = [
+        "https://site.web.api.espn.com/apis/common/v3/sports/" + sport + "/" + lg + "/athletes/" + found_pid + "/overview",
+        "https://site.web.api.espn.com/apis/common/v3/sports/" + sport + "/" + lg + "/athletes/" + found_pid + "/stats",
+        BASE + "/" + sport + "/" + lg + "/athletes/" + found_pid + "/statistics/0",
+        BASE + "/" + sport + "/" + lg + "/athletes/" + found_pid + "/statistics",
+    ]
+
+    stats_found = False
+    for url in overview_urls:
+        data = safe_get(url)
+        if not data:
+            continue
+
+        # Try to find stats in various shapes
+        def extract_stat_lines(node):
+            lines = []
+            if isinstance(node, dict):
+                cats = (node.get("statistics") or {}).get("splits", {}).get("categories") or                        node.get("splits", {}).get("categories") or                        node.get("categories") or []
+                for cat in cats[:4]:
+                    stat_bits = []
+                    for stat in cat.get("stats", [])[:10]:
+                        sname = stat.get("shortDisplayName") or stat.get("abbreviation") or stat.get("displayName","")
+                        sval  = str(stat.get("displayValue") or stat.get("value") or "")
+                        if sname and sval and sval not in ("0","0.0","--","","null"):
+                            stat_bits.append(sname + ":" + sval)
+                    if stat_bits:
+                        cname = cat.get("displayName") or cat.get("name") or ""
+                        lines.append(cname + ": " + " ".join(stat_bits))
+            return lines
+
+        stat_lines = extract_stat_lines(data)
+
+        # Also check nested keys
+        if not stat_lines:
+            for key in ("athlete","player","statistics","stats","overview"):
+                sub = data.get(key)
+                if sub:
+                    stat_lines = extract_stat_lines(sub if isinstance(sub, dict) else {})
+                    if stat_lines:
+                        break
+
+        if stat_lines:
+            msgs.extend(stat_lines)
+            stats_found = True
+            break
+
+    # Step 3: If still no stats, pull from recent game leaders as fallback
+    if not stats_found:
+        sboard = safe_get(sport_url(league, "/scoreboard"))
+        if sboard:
+            for event in sboard.get("events", []):
+                comp = event.get("competitions", [{}])[0]
+                for competitor in comp.get("competitors", []):
+                    if competitor.get("team", {}).get("displayName","") == found_team:
+                        for leader_cat in competitor.get("leaders", []):
+                            for leader in leader_cat.get("leaders", []):
+                                aname = leader.get("athlete", {}).get("displayName","")
+                                if found_name.lower() in aname.lower():
+                                    cat_name = leader_cat.get("displayName","")
+                                    val      = leader.get("displayValue","")
+                                    if cat_name and val:
+                                        msgs.append(cat_name + ": " + val)
+                                        stats_found = True
+
+    if not stats_found:
+        msgs.append("Season stats not available.")
+        msgs.append("Try: nba lakers scores")
+        msgs.append("then: info (for game leaders)")
+
+    return msgs
 
 
 # -- Head to head --------------------------------------------------------------
