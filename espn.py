@@ -381,12 +381,14 @@ def get_balldontlie_stats(player_name):
     if not BDL_KEY:
         return None
     try:
+        # Try search with last name only for better results
+        last_name = player_name.split()[-1] if player_name.split() else player_name
         search = safe_get(
             "https://api.balldontlie.io/v1/players",
-            params={"search": player_name, "per_page": 5},
+            params={"search": last_name, "per_page": 5},
             headers={"Authorization": BDL_KEY}
         )
-        print("BDL player search:", player_name, type(search), search.get("data") if search else None, flush=True)
+        print("BDL player search:", last_name, type(search), search.get("data") if search else None, flush=True)
         if not search:
             return None
         players = search.get("data", [])
@@ -673,109 +675,24 @@ def check_game_finished(league, team_id):
 
 # -- League stat leaders ------------------------------------------------------
 def get_stat_leaders(league, stat_type="points"):
-    sport, lg = SPORT_MAP[league]
-
-    # Stat type aliases
-    STAT_MAP = {
-        # NBA
-        "points":"pointsPerGame", "pts":"pointsPerGame",
-        "rebounds":"reboundsPerGame", "reb":"reboundsPerGame",
-        "assists":"assistsPerGame", "ast":"assistsPerGame",
-        "steals":"stealsPerGame", "stl":"stealsPerGame",
-        "blocks":"blocksPerGame", "blk":"blocksPerGame",
-        # NHL
-        "goals":"goals", "g":"goals",
-        "assists":"assists",
-        "plusminus":"plusMinus", "pm":"plusMinus",
-        "saves":"saves",
-        # NFL
-        "passing":"passingYards", "passyards":"passingYards",
-        "rushing":"rushingYards", "rushyards":"rushingYards",
-        "receiving":"receivingYards", "recyards":"receivingYards",
-        "touchdowns":"touchdowns", "td":"touchdowns",
-        "sacks":"sacks",
-        # MLB
-        "era":"ERA", "avg":"avg", "hr":"homeRuns",
-        "rbi":"RBI", "sb":"stolenBases",
-        "strikeouts":"strikeouts", "so":"strikeouts",
-        "wins":"wins",
-    }
-
-    stat_key = STAT_MAP.get(stat_type.lower(), stat_type)
-
-    # Try ESPN leaders endpoint
-    endpoints = [
-        BASE + "/" + sport + "/" + lg + "/leaders",
-        "https://site.web.api.espn.com/apis/v2/sports/" + sport + "/" + lg + "/leaders",
-    ]
-
-    for endpoint in endpoints:
-        data = safe_get(endpoint)
-        print("LEADERS endpoint:", endpoint, "keys:", list(data.keys()) if data else "None", flush=True)
-        if not data:
-            continue
-        categories = data.get("categories", [])
-        print("LEADERS categories count:", len(categories), [c.get("name","") for c in categories[:5]], flush=True)
-        for cat in categories:
-            name = cat.get("name","").lower()
-            disp = cat.get("displayName","")
-            if stat_key.lower() in name or stat_key.lower() in disp.lower():
-                leaders = cat.get("leaders", [])
-                if not leaders:
-                    continue
-                msgs = [league.upper() + " " + disp + " leaders:"]
-                for i, leader in enumerate(leaders[:10], 1):
-                    aname = leader.get("athlete", {}).get("displayName","?")
-                    val   = leader.get("displayValue", leader.get("value","?"))
-                    team  = leader.get("team", {}).get("abbreviation","")
-                    line  = str(i) + ". " + aname
-                    if team: line += " (" + team + ")"
-                    line += ": " + str(val)
-                    msgs.append(line)
-                return msgs
-
-        # If specific stat not found, return all available categories
-        if categories:
-            msgs = [league.upper() + " stat leaders:"]
-            for cat in categories[:8]:
-                disp    = cat.get("displayName","")
-                leaders = cat.get("leaders", [])
-                if leaders and disp:
-                    top     = leaders[0]
-                    aname   = top.get("athlete", {}).get("displayName","?")
-                    val     = top.get("displayValue","?")
-                    team    = top.get("team", {}).get("abbreviation","")
-                    line    = disp + ": " + aname
-                    if team: line += " (" + team + ")"
-                    line += " " + str(val)
-                    msgs.append(line)
-            return msgs
-
-    # Use sport-specific APIs
+    """Route directly to working sport-specific APIs. Skip ESPN (all blocked)."""
     if league == "nhl":
         result = get_nhl_leaders(stat_type)
-        if result:
-            return result
     elif league == "mlb":
         result = get_mlb_leaders(stat_type)
-        if result:
-            return result
     elif league == "nfl":
         result = get_nfl_leaders(stat_type)
-        if result:
-            return result
     elif league == "nba":
         result = get_nba_leaders_bdl(stat_type)
-        if result:
-            return result
-
-    return [league.upper() + " " + stat_type + " leaders not available."]
+    else:
+        result = None
+    return result or [league.upper() + " " + stat_type + " leaders not available."]
 
 
 def get_nba_leaders_bdl(stat_type):
-    """NBA stat leaders via balldontlie.io (requires free API key)."""
+    """NBA stat leaders via balldontlie.io season averages."""
     STAT_MAP = {
-        "points":"pts","pts":"pts",
+        "points":"pts","pts":"pts","scoring":"pts",
         "rebounds":"reb","reb":"reb",
         "assists":"ast","ast":"ast",
         "steals":"stl","stl":"stl",
@@ -787,42 +704,32 @@ def get_nba_leaders_bdl(stat_type):
     if not BDL_KEY:
         return ["NBA leaders: set BALLDONTLIE_KEY in Render."]
     try:
-        # Get all players first, then fetch their averages
-        # Use the stats endpoint with season filter
+        # Get season averages for all players (sorted by the stat)
         data = safe_get(
-            "https://api.balldontlie.io/v1/stats",
-            params={
-                "seasons[]": 2024,
-                "per_page": 25,
-                "postseason": "false",
-            },
+            "https://api.balldontlie.io/v1/season_averages",
+            params={"season": 2024, "per_page": 100},
             headers={"Authorization": BDL_KEY}
         )
-        print("BDL leaders data:", type(data), data.get("data",[])[0] if data and data.get("data") else "empty", flush=True)
+        print("BDL leaders data:", type(data), len(data.get("data",[])) if data else 0, flush=True)
         if not data or not data.get("data"):
             return None
-        # Aggregate by player
-        player_stats = {}
-        for game in data.get("data",[]):
-            p = game.get("player",{})
-            pid = p.get("id")
-            if not pid:
-                continue
-            if pid not in player_stats:
-                player_stats[pid] = {"name": p.get("last_name","?") + " " + (p.get("first_name","?") or "?")[0],
-                                      "team": game.get("team",{}).get("abbreviation",""),
-                                      "vals": [], "games": 0}
-            val = game.get(key)
-            if val is not None:
-                player_stats[pid]["vals"].append(float(val))
-                player_stats[pid]["games"] += 1
-        ranked = sorted(player_stats.values(), key=lambda x: sum(x["vals"])/len(x["vals"]) if x["vals"] else 0, reverse=True)[:10]
-        if not ranked:
+        players = [p for p in data["data"] if p.get(key) is not None]
+        players.sort(key=lambda x: float(x.get(key,0) or 0), reverse=True)
+        players = players[:10]
+        if not players:
             return None
-        msgs = ["NBA " + key.upper() + " leaders:"]
-        for i, p in enumerate(ranked, 1):
-            avg = sum(p["vals"])/len(p["vals"]) if p["vals"] else 0
-            msgs.append(str(i) + ". " + p["name"] + " (" + p["team"] + "): " + str(round(avg,1)))
+        msgs = ["NBA " + key.upper() + "/g leaders:"]
+        for i, p in enumerate(players, 1):
+            pid  = p.get("player_id","")
+            name = "Player " + str(pid)
+            # Try to get name from player endpoint
+            pdata = safe_get("https://api.balldontlie.io/v1/players/" + str(pid),
+                           headers={"Authorization": BDL_KEY}, timeout_override=3)
+            if pdata and pdata.get("data"):
+                pd = pdata["data"]
+                name = pd.get("last_name","?") + " " + (pd.get("first_name","") or "")[0:1]
+            val = p.get(key,"?")
+            msgs.append(str(i) + ". " + name + ": " + str(val))
         return msgs
     except Exception as e:
         print("BDL leaders error:", e, flush=True)
@@ -1017,6 +924,11 @@ def get_odds(league, odds_type="championship"):
         "nfl": "americanfootball_nfl_super_bowl_winner",
         "mlb": "baseball_mlb_world_series_winner",
     }
+    # NFL next season futures use a different key
+    NFL_NEXT_KEYS = [
+        "americanfootball_nfl_super_bowl_winner",
+        "americanfootball_nfl",
+    ]
 
     ODDS_KEY = os.environ.get("ODDS_API_KEY","")
     if not ODDS_KEY:
