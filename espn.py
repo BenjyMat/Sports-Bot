@@ -276,49 +276,53 @@ def get_transactions(league, team_id, team_name):
     return msgs or [team_name + ": No recent transactions."]
 
 
-# -- Player lookup -------------------------------------------------------------
+# -- Player lookup (searches all team rosters) --------------------------------
 def get_player(league, player_name):
+    """Search for a player by scanning all team rosters."""
     sport, lg = SPORT_MAP[league]
-    data = safe_get(
-        BASE + "/" + sport + "/" + lg + "/athletes",
-        {"limit": 5, "search": player_name}
-    )
-    if not data:
-        return ["Player not found."]
-    athletes = data.get("items", data.get("athletes", []))
-    if not athletes:
-        return ["No player found matching: " + player_name]
-    player  = athletes[0]
-    name    = player.get("displayName", player.get("fullName", "?"))
-    pos     = player.get("position", {}).get("abbreviation", "")
-    team    = player.get("team", {}).get("displayName", "")
-    jersey  = player.get("jersey", "")
-    age     = str(player.get("age", ""))
-    pid     = player.get("id", "")
-    # Get stats
-    stats_data = safe_get(BASE + "/" + sport + "/" + lg + "/athletes/" + pid + "/statistics") if pid else None
-    msgs = []
-    header = name
-    if pos:
-        header += " " + pos
-    if team:
-        header += " | " + team
-    if jersey:
-        header += " #" + jersey
-    msgs.append(header)
-    if stats_data:
-        splits = stats_data.get("statistics", {}).get("splits", {}).get("categories", [])
-        for cat in splits[:3]:
-            cat_name = cat.get("displayName", "")
-            stat_lines = []
-            for stat in cat.get("stats", [])[:5]:
-                sname = stat.get("shortDisplayName", stat.get("displayName", ""))
-                sval  = stat.get("displayValue", "")
-                if sname and sval and sval != "0" and sval != "0.0":
-                    stat_lines.append(sname + ":" + sval)
-            if stat_lines:
-                msgs.append(cat_name + ": " + " ".join(stat_lines))
-    return msgs or [name + ": No stats available."]
+    query = player_name.lower().strip()
+    teams = _get_teams_raw(league)
+    if not teams:
+        return ["Could not load teams."]
+    for team in teams:
+        data = safe_get(sport_url(league, "/teams/" + team["id"] + "/roster"))
+        if not data:
+            continue
+        athletes = data.get("athletes", [])
+        players  = []
+        if athletes and isinstance(athletes[0], dict) and "items" in athletes[0]:
+            for group in athletes:
+                for p in group.get("items", []):
+                    players.append(p)
+        else:
+            players = athletes
+        for player in players:
+            name = player.get("displayName", player.get("fullName", ""))
+            if query in name.lower():
+                pos    = player.get("position", {}).get("abbreviation", "") if isinstance(player.get("position"), dict) else ""
+                jersey = player.get("jersey", "")
+                pid    = player.get("id", "")
+                header = name
+                if pos:    header += " (" + pos + ")"
+                if jersey: header += " #" + jersey
+                header += " | " + team["name"]
+                msgs = [header]
+                # Try to get stats
+                if pid:
+                    sdata = safe_get(BASE + "/" + sport + "/" + lg + "/athletes/" + pid + "/statistics")
+                    if sdata:
+                        cats = sdata.get("statistics", {}).get("splits", {}).get("categories", [])
+                        for cat in cats[:2]:
+                            stat_lines = []
+                            for stat in cat.get("stats", [])[:6]:
+                                sname = stat.get("shortDisplayName", "")
+                                sval  = stat.get("displayValue", "")
+                                if sname and sval and sval not in ("0","0.0","--"):
+                                    stat_lines.append(sname + ":" + sval)
+                            if stat_lines:
+                                msgs.append(" ".join(stat_lines))
+                return msgs
+    return ["Player not found: " + player_name, "Try searching by last name."]
 
 
 # -- Head to head --------------------------------------------------------------
