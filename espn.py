@@ -654,6 +654,217 @@ def check_game_finished(league, team_id):
     return None
 
 
+# -- League stat leaders ------------------------------------------------------
+def get_stat_leaders(league, stat_type="points"):
+    sport, lg = SPORT_MAP[league]
+
+    # Stat type aliases
+    STAT_MAP = {
+        # NBA
+        "points":"pointsPerGame", "pts":"pointsPerGame",
+        "rebounds":"reboundsPerGame", "reb":"reboundsPerGame",
+        "assists":"assistsPerGame", "ast":"assistsPerGame",
+        "steals":"stealsPerGame", "stl":"stealsPerGame",
+        "blocks":"blocksPerGame", "blk":"blocksPerGame",
+        # NHL
+        "goals":"goals", "g":"goals",
+        "assists":"assists",
+        "plusminus":"plusMinus", "pm":"plusMinus",
+        "saves":"saves",
+        # NFL
+        "passing":"passingYards", "passyards":"passingYards",
+        "rushing":"rushingYards", "rushyards":"rushingYards",
+        "receiving":"receivingYards", "recyards":"receivingYards",
+        "touchdowns":"touchdowns", "td":"touchdowns",
+        "sacks":"sacks",
+        # MLB
+        "era":"ERA", "avg":"avg", "hr":"homeRuns",
+        "rbi":"RBI", "sb":"stolenBases",
+        "strikeouts":"strikeouts", "so":"strikeouts",
+        "wins":"wins",
+    }
+
+    stat_key = STAT_MAP.get(stat_type.lower(), stat_type)
+
+    # Try ESPN leaders endpoint
+    endpoints = [
+        BASE + "/" + sport + "/" + lg + "/leaders",
+        "https://site.web.api.espn.com/apis/v2/sports/" + sport + "/" + lg + "/leaders",
+    ]
+
+    for endpoint in endpoints:
+        data = safe_get(endpoint)
+        if not data:
+            continue
+        categories = data.get("categories", [])
+        for cat in categories:
+            name = cat.get("name","").lower()
+            disp = cat.get("displayName","")
+            if stat_key.lower() in name or stat_key.lower() in disp.lower():
+                leaders = cat.get("leaders", [])
+                if not leaders:
+                    continue
+                msgs = [league.upper() + " " + disp + " leaders:"]
+                for i, leader in enumerate(leaders[:10], 1):
+                    aname = leader.get("athlete", {}).get("displayName","?")
+                    val   = leader.get("displayValue", leader.get("value","?"))
+                    team  = leader.get("team", {}).get("abbreviation","")
+                    line  = str(i) + ". " + aname
+                    if team: line += " (" + team + ")"
+                    line += ": " + str(val)
+                    msgs.append(line)
+                return msgs
+
+        # If specific stat not found, return all available categories
+        if categories:
+            msgs = [league.upper() + " stat leaders:"]
+            for cat in categories[:8]:
+                disp    = cat.get("displayName","")
+                leaders = cat.get("leaders", [])
+                if leaders and disp:
+                    top     = leaders[0]
+                    aname   = top.get("athlete", {}).get("displayName","?")
+                    val     = top.get("displayValue","?")
+                    team    = top.get("team", {}).get("abbreviation","")
+                    line    = disp + ": " + aname
+                    if team: line += " (" + team + ")"
+                    line += " " + str(val)
+                    msgs.append(line)
+            return msgs
+
+    # NBA fallback via balldontlie
+    if league == "nba":
+        return get_nba_leaders_bdl(stat_type)
+
+    return [league.upper() + " leaders not available."]
+
+
+def get_nba_leaders_bdl(stat_type):
+    """NBA stat leaders via balldontlie."""
+    STAT_MAP = {
+        "points":"pts","pts":"pts",
+        "rebounds":"reb","reb":"reb",
+        "assists":"ast","ast":"ast",
+        "steals":"stl","stl":"stl",
+        "blocks":"blk","blk":"blk",
+    }
+    key = STAT_MAP.get(stat_type.lower(), "pts")
+    try:
+        data = safe_get(
+            "https://api.balldontlie.io/v1/season_averages",
+            params={"season": 2024, "per_page": 100}
+        )
+        if not data:
+            return None
+        players = sorted(
+            [p for p in data.get("data",[]) if p.get(key) is not None],
+            key=lambda x: float(x.get(key,0)),
+            reverse=True
+        )[:10]
+        if not players:
+            return None
+        msgs = ["NBA " + key.upper() + " leaders:"]
+        for i, p in enumerate(players, 1):
+            name = p.get("player",{}).get("last_name","?") + " " + p.get("player",{}).get("first_name","?")[0]
+            team = p.get("team",{}).get("abbreviation","")
+            val  = p.get(key,"?")
+            msgs.append(str(i) + ". " + name + " (" + team + "): " + str(val))
+        return msgs
+    except Exception:
+        return None
+
+
+# -- Championship / futures odds -----------------------------------------------
+def get_odds(league, odds_type="championship"):
+    sport, lg = SPORT_MAP[league]
+
+    ODDS_ENDPOINTS = [
+        "https://sports.core.api.espn.com/v2/sports/" + sport + "/leagues/" + lg + "/odds",
+        "https://sports.core.api.espn.com/v2/sports/" + sport + "/leagues/" + lg + "/futures",
+        "https://site.web.api.espn.com/apis/v2/sports/" + sport + "/" + lg + "/futures",
+    ]
+
+    AWARD_NAMES = {
+        "nba": ["NBA Championship","MVP","Rookie of the Year","Defensive Player","6th Man"],
+        "nhl": ["Stanley Cup","Hart Trophy","Norris Trophy","Vezina Trophy","Calder Trophy"],
+        "nfl": ["Super Bowl","NFL MVP","Offensive Player","Defensive Player","OROY","DROY"],
+        "mlb": ["World Series","AL MVP","NL MVP","AL Cy Young","NL Cy Young","AL ROY","NL ROY"],
+    }
+
+    # Try ESPN odds endpoints
+    for endpoint in ODDS_ENDPOINTS:
+        data = safe_get(endpoint)
+        if not data:
+            continue
+        items = data.get("items", data.get("futures", data.get("odds", [])))
+        if not items:
+            continue
+        msgs = [league.upper() + " " + odds_type.title() + " Odds:"]
+        count = 0
+        for item in items[:5]:
+            name    = item.get("name", item.get("displayName","?"))
+            details = item.get("details", [])
+            if details:
+                for detail in details[:8]:
+                    team  = detail.get("team", {}).get("displayName", detail.get("name","?"))
+                    price = detail.get("price", {})
+                    odds  = price.get("displayOdds", price.get("americanOdds","?"))
+                    msgs.append(team + ": " + str(odds))
+                    count += 1
+                    if count >= 10:
+                        break
+            if count >= 10:
+                break
+        if len(msgs) > 1:
+            return msgs
+
+    # Fallback: use The Odds API (free tier, 500 requests/month)
+    SPORT_KEYS = {
+        "nhl": "icehockey_nhl",
+        "nba": "basketball_nba",
+        "nfl": "americanfootball_nfl",
+        "mlb": "baseball_mlb",
+    }
+    MARKET_KEYS = {
+        "championship": "outrights",
+        "mvp":          "outrights",
+        "futures":      "outrights",
+    }
+    sport_key  = SPORT_KEYS.get(league)
+    market_key = MARKET_KEYS.get(odds_type.lower(), "outrights")
+
+    if sport_key:
+        odds_data = safe_get(
+            "https://api.the-odds-api.com/v4/sports/" + sport_key + "/odds",
+            params={
+                "apiKey": "9d792cf4a73d5c17fa5c4b2c8ff012e7",
+                "regions": "us",
+                "markets": market_key,
+                "oddsFormat": "american",
+            }
+        )
+        if odds_data and isinstance(odds_data, list):
+            msgs    = [league.upper() + " " + odds_type.title() + " Odds:"]
+            seen    = {}
+            for game in odds_data:
+                for bookmaker in game.get("bookmakers", [])[:1]:
+                    for market in bookmaker.get("markets", []):
+                        for outcome in market.get("outcomes", []):
+                            name  = outcome.get("name","?")
+                            price = outcome.get("price","?")
+                            if name not in seen:
+                                seen[name] = price
+            sorted_odds = sorted(seen.items(), key=lambda x: x[1])
+            for name, price in sorted_odds[:12]:
+                prefix = "+" if isinstance(price, (int,float)) and price > 0 else ""
+                msgs.append(name + ": " + prefix + str(price))
+            if len(msgs) > 1:
+                return msgs
+
+    award_list = AWARD_NAMES.get(league, [])
+    return [league.upper() + " odds not available.", "Awards: " + ", ".join(award_list) if award_list else ""]
+
+
 # -- Dispatcher ----------------------------------------------------------------
 def get_data(league, team_id, team_name, category):
     key = league + "-" + team_id + "-" + category
@@ -669,5 +880,14 @@ def get_data(league, team_id, team_name, category):
         if category == "transactions": return get_transactions(league, team_id, team_name)
         if category == "homeaway":     return get_home_away(league, team_id, team_name)
         return ["Unknown category."]
+
+
+def get_league_leaders(league, stat_type="points"):
+    return _cached("leaders-" + league + "-" + stat_type, CACHE_LONG,
+                   lambda: get_stat_leaders(league, stat_type))
+
+def get_league_odds(league, odds_type="championship"):
+    return _cached("odds-" + league + "-" + odds_type, 3600,
+                   lambda: get_odds(league, odds_type))
 
     return _cached(key, ttl, fetch)
