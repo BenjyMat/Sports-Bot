@@ -647,12 +647,21 @@ def handle_message(user_id, data):
                 send_results(user_id, result, s)
                 return
 
+            # Player lookup — check BEFORE league-wide
+            if qc.get("player") and not qc.get("team"):
+                player = qc["player"]
+                reply(user_id, "Searching rosters...")
+                result = run_fetch(lambda: espn.get_player(league, player))
+                result = result or ["Player not found."]
+                s["step"] = "AGAIN"
+                send_results(user_id, result, s)
+                return
+
             # League-wide (no team given)
             if qc.get("league_wide") or not qc.get("team"):
                 cat = qc.get("category")
                 lc  = LEAGUE_CATS.get(cat.replace("league_","") if cat else "") or LEAGUE_CATS.get(cat or "")
                 if not lc and cat:
-                    # map scores->league_scores etc
                     mapping = {"scores":"league_scores","schedule":"league_schedule","news":"league_news"}
                     lc = mapping.get(cat)
                 if lc:
@@ -663,7 +672,6 @@ def handle_message(user_id, data):
                     result = result or ["No data available."]
                     send_results(user_id, result, s)
                 else:
-                    # Just set league, show team list
                     teams = _teams_cache.get(league) or espn.get_teams(league)
                     if teams:
                         _teams_cache[league] = teams
@@ -677,15 +685,6 @@ def handle_message(user_id, data):
                             reply(user_id, chunk)
                         time.sleep(2)
                         reply(user_id, "Type name, # or abbrev.\n0=whole league view")
-                return
-
-            # Player lookup
-            if qc.get("player") and not qc.get("team"):
-                player = qc["player"]
-                result = run_fetch(lambda: espn.get_player(league, player))
-                result = result or ["Player not found."]
-                s["step"] = "AGAIN"
-                send_results(user_id, result, s)
                 return
 
             # Team + optional category
