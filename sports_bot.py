@@ -381,15 +381,17 @@ def parse_quick_command(tl):
         return None
     result["league"] = lg
 
+    # "stats" keyword = player lookup
+    PLAYER_WORDS = {"stats", "player", "stat"}
+
     # Category
     for w in words[1:]:
         if w in CATEGORIES:
             result["category"] = CATEGORIES[w]
 
-    # Team — everything that isn't league or category
-    team_words = [w for w in words[1:] if w not in CATEGORIES and w not in LEAGUES]
+    # Team — everything that isn't league, category, or player keyword
+    team_words = [w for w in words[1:] if w not in CATEGORIES and w not in LEAGUES and w not in PLAYER_WORDS]
     if not team_words:
-        # No team — league-wide command
         result["league_wide"] = True
         return result
 
@@ -400,6 +402,9 @@ def parse_quick_command(tl):
         team = pick_team(query, teams)
         if team:
             result["team"] = team
+        else:
+            # No team matched — treat as player name
+            result["player"] = query
 
     return result
 
@@ -672,6 +677,15 @@ def handle_message(user_id, data):
                             reply(user_id, chunk)
                         time.sleep(2)
                         reply(user_id, "Type name, # or abbrev.\n0=whole league view")
+                return
+
+            # Player lookup
+            if qc.get("player") and not qc.get("team"):
+                player = qc["player"]
+                result = run_fetch(lambda: espn.get_player(league, player))
+                result = result or ["Player not found."]
+                s["step"] = "AGAIN"
+                send_results(user_id, result, s)
                 return
 
             # Team + optional category
