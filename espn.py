@@ -400,35 +400,26 @@ def get_balldontlie_stats(player_name):
             return None
 
         # Get current season averages
-        stats = safe_get(
-            "https://api.balldontlie.io/v1/season_averages",
-            params={"player_ids[]": pid, "season": 2024, "season_type": "regular"},
-            headers={"Authorization": BDL_KEY}
+        # season_averages requires paid tier - use player profile instead
+        pdata = safe_get(
+            "https://api.balldontlie.io/v1/players/" + str(pid),
+            headers={"Authorization": BDL_KEY},
+            timeout_override=5
         )
-        print("BDL stats for pid", pid, ":", type(stats), stats.get("data") if stats else None, flush=True)
-        if not stats:
+        print("BDL player data for pid", pid, ":", type(pdata), flush=True)
+        if not pdata or not pdata.get("data"):
             return None
-        avgs = stats.get("data", [])
-        if not avgs:
-            return None
-        a = avgs[0]
-        lines = []
-        gp  = a.get("games_played", "?")
-        pts = a.get("pts",  "?")
-        reb = a.get("reb",  "?")
-        ast = a.get("ast",  "?")
-        stl = a.get("stl",  "?")
-        blk = a.get("blk",  "?")
-        fg  = a.get("fg_pct",  "?")
-        fg3 = a.get("fg3_pct", "?")
-        ft  = a.get("ft_pct",  "?")
-        min_ = a.get("min", "?")
-        lines.append("2024-25 per game (" + str(gp) + " GP):")
-        lines.append("PTS:" + str(pts) + " REB:" + str(reb) + " AST:" + str(ast))
-        lines.append("STL:" + str(stl) + " BLK:" + str(blk) + " MIN:" + str(min_))
-        lines.append("FG:" + str(fg) + " 3P:" + str(fg3) + " FT:" + str(ft))
-        return lines
-    except Exception:
+        a = pdata["data"]
+        # Build basic profile since averages aren't available on free tier
+        pos    = a.get("position","")
+        height = a.get("height","")
+        weight = a.get("weight","")
+        team   = a.get("team",{}).get("full_name","")
+        msgs.append("Pos:" + pos + " " + height + " " + weight + "lbs")
+        msgs.append(team)
+        return msgs
+    except Exception as e:
+        print("BDL stats error:", e, flush=True)
         return None
 
 
@@ -690,49 +681,50 @@ def get_stat_leaders(league, stat_type="points"):
 
 
 def get_nba_leaders_bdl(stat_type):
-    """NBA stat leaders via balldontlie.io season averages."""
+    """NBA stat leaders via stats.nba.com (free, no key needed)."""
     STAT_MAP = {
-        "points":"pts","pts":"pts","scoring":"pts",
-        "rebounds":"reb","reb":"reb",
-        "assists":"ast","ast":"ast",
-        "steals":"stl","stl":"stl",
-        "blocks":"blk","blk":"blk",
+        "points":"PTS","pts":"PTS","scoring":"PTS",
+        "rebounds":"REB","reb":"REB",
+        "assists":"AST","ast":"AST",
+        "steals":"STL","stl":"STL",
+        "blocks":"BLK","blk":"BLK",
+        "fg":"FG_PCT","3p":"FG3_PCT","ft":"FT_PCT",
     }
-    key = STAT_MAP.get(stat_type.lower(), "pts")
-    BDL_KEY = os.environ.get("BALLDONTLIE_KEY","")
-    print("BDL leaders key present:", bool(BDL_KEY), flush=True)
-    if not BDL_KEY:
-        return ["NBA leaders: set BALLDONTLIE_KEY in Render."]
+    stat_col = STAT_MAP.get(stat_type.lower(), "PTS")
     try:
-        # Get season averages for all players (sorted by the stat)
-        data = safe_get(
-            "https://api.balldontlie.io/v1/season_averages",
-            params={"season": 2024, "per_page": 100},
-            headers={"Authorization": BDL_KEY}
-        )
-        print("BDL leaders data:", type(data), len(data.get("data",[])) if data else 0, flush=True)
-        if not data or not data.get("data"):
+        import urllib.request, json as _json
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.nba.com/",
+            "Origin": "https://www.nba.com",
+            "Accept": "application/json",
+        }
+        url = ("https://stats.nba.com/stats/leagueleaders"
+               "?LeagueID=00&PerMode=PerGame&Scope=S&Season=2024-25"
+               "&SeasonType=Regular+Season&StatCategory=" + stat_col)
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = _json.loads(resp.read().decode())
+        result  = data["resultSet"]
+        cols    = result["headers"]
+        rows    = result["rowSet"]
+        print("NBA leaders:", stat_col, len(rows), "players", flush=True)
+        if not rows:
             return None
-        players = [p for p in data["data"] if p.get(key) is not None]
-        players.sort(key=lambda x: float(x.get(key,0) or 0), reverse=True)
-        players = players[:10]
-        if not players:
-            return None
-        msgs = ["NBA " + key.upper() + "/g leaders:"]
-        for i, p in enumerate(players, 1):
-            pid  = p.get("player_id","")
-            name = "Player " + str(pid)
-            # Try to get name from player endpoint
-            pdata = safe_get("https://api.balldontlie.io/v1/players/" + str(pid),
-                           headers={"Authorization": BDL_KEY}, timeout_override=3)
-            if pdata and pdata.get("data"):
-                pd = pdata["data"]
-                name = pd.get("last_name","?") + " " + (pd.get("first_name","") or "")[0:1]
-            val = p.get(key,"?")
-            msgs.append(str(i) + ". " + name + ": " + str(val))
-        return msgs
+        rank_idx = cols.index("RANK") if "RANK" in cols else 0
+        name_idx = cols.index("PLAYER") if "PLAYER" in cols else 1
+        team_idx = cols.index("TEAM") if "TEAM" in cols else 2
+        stat_idx = cols.index(stat_col) if stat_col in cols else 3
+        msgs = ["NBA " + stat_col + "/g leaders:"]
+        for row in rows[:10]:
+            rank = row[rank_idx]
+            name = row[name_idx]
+            team = row[team_idx]
+            val  = row[stat_idx]
+            msgs.append(str(rank) + ". " + str(name) + " (" + str(team) + "): " + str(val))
+        return msgs if len(msgs) > 1 else None
     except Exception as e:
-        print("BDL leaders error:", e, flush=True)
+        print("NBA leaders stats.nba error:", e, flush=True)
         return None
 
 
@@ -795,6 +787,7 @@ def get_nhl_leaders(stat_type="points"):
 
 def get_mlb_leaders(stat_type="homeRuns"):
     """MLB stat leaders via official MLB Stats API (no key needed)."""
+    print("get_mlb_leaders called with:", stat_type, flush=True)
     STAT_MAP = {
         "hr":"homeRuns","homeruns":"homeRuns","homeRuns":"homeRuns",
         "avg":"battingAverage","average":"battingAverage",
