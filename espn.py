@@ -326,9 +326,11 @@ def get_player(league, player_name):
     header += " | " + found_team
     msgs = [header]
 
-    # Try balldontlie for NBA player stats
+    # Try balldontlie for NBA player stats first
     if league == "nba":
+        print("Trying balldontlie for:", found_name, "key set:", bool(os.environ.get("BALLDONTLIE_KEY","")), flush=True)
         bdl = get_balldontlie_stats(found_name)
+        print("BDL result:", bdl, flush=True)
         if bdl:
             msgs.extend(bdl)
             return msgs
@@ -817,38 +819,41 @@ def get_nhl_leaders(stat_type="points"):
         "wins":"wins","w":"wins",
         "gaa":"goalsAgainstAverage",
         "savepct":"savePctg","sv":"savePctg",
+        "shutouts":"shutouts",
     }
     cat = STAT_MAP.get(stat_type.lower(), "points")
     try:
-        data = safe_get(
-            "https://api-web.nhle.com/v1/skater-stats-leaders/current",
-            params={"categories": cat, "limit": 10}
-        )
-        if data and cat in data:
+        # NHL API - skater leaders
+        import urllib.request, json as _json
+        url = "https://api-web.nhle.com/v1/skater-stats-leaders/current?categories=" + cat + "&limit=10"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read().decode())
+        print("NHL leaders data keys:", list(data.keys()) if isinstance(data, dict) else type(data), flush=True)
+        if isinstance(data, dict) and cat in data:
             leaders = data[cat]
             msgs = ["NHL " + cat + " leaders:"]
-            for i, p in enumerate(leaders, 1):
-                fname  = p.get("firstName",{}).get("default","")
-                lname  = p.get("lastName",{}).get("default","")
-                team   = p.get("teamAbbrevAbbrev", p.get("teamAbbrev",{}).get("default",""))
-                val    = p.get("value", p.get(cat,"?"))
-                msgs.append(str(i) + ". " + fname + " " + lname + " (" + str(team) + "): " + str(val))
-            return msgs
-        # Try goalie leaders
-        gdata = safe_get(
-            "https://api-web.nhle.com/v1/goalie-stats-leaders/current",
-            params={"categories": cat, "limit": 10}
-        )
-        if gdata and cat in gdata:
-            leaders = gdata[cat]
-            msgs = ["NHL " + cat + " leaders:"]
-            for i, p in enumerate(leaders, 1):
-                fname = p.get("firstName",{}).get("default","")
-                lname = p.get("lastName",{}).get("default","")
-                team  = p.get("teamAbbrev",{}).get("default","")
+            for i, p in enumerate(leaders[:10], 1):
+                fname = p.get("firstName",{}).get("default","") if isinstance(p.get("firstName"), dict) else str(p.get("firstName",""))
+                lname = p.get("lastName",{}).get("default","") if isinstance(p.get("lastName"), dict) else str(p.get("lastName",""))
+                tobj  = p.get("teamAbbrev",{})
+                team  = tobj.get("default","") if isinstance(tobj, dict) else str(tobj)
                 val   = p.get("value", p.get(cat,"?"))
-                msgs.append(str(i) + ". " + fname + " " + lname + " (" + str(team) + "): " + str(val))
+                msgs.append(str(i) + ". " + fname + " " + lname + " (" + team + "): " + str(val))
             return msgs
+        # Try all keys to find leaders
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if isinstance(v, list) and len(v) > 0:
+                    msgs = ["NHL " + k + " leaders:"]
+                    for i, p in enumerate(v[:10], 1):
+                        fname = p.get("firstName",{}).get("default","") if isinstance(p.get("firstName"), dict) else str(p.get("firstName",""))
+                        lname = p.get("lastName",{}).get("default","") if isinstance(p.get("lastName"), dict) else str(p.get("lastName",""))
+                        tobj  = p.get("teamAbbrev",{})
+                        team  = tobj.get("default","") if isinstance(tobj, dict) else str(tobj)
+                        val   = p.get("value","?")
+                        msgs.append(str(i) + ". " + fname + " " + lname + " (" + team + "): " + str(val))
+                    return msgs
     except Exception as e:
         print("NHL leaders error:", e, flush=True)
     return None
@@ -870,11 +875,14 @@ def get_mlb_leaders(stat_type="homeRuns"):
     cat = STAT_MAP.get(stat_type.lower(), stat_type)
     try:
         # Hitting leaders
+        from datetime import datetime as _dt
+        cur_year = _dt.now().year
+        season   = cur_year if _dt.now().month >= 4 else cur_year - 1
         data = safe_get(
             "https://statsapi.mlb.com/api/v1/stats/leaders",
             params={
                 "leaderCategories": cat,
-                "season": 2025,
+                "season": season,
                 "limit": 10,
                 "statGroup": "hitting",
                 "sportId": 1,
@@ -885,7 +893,7 @@ def get_mlb_leaders(stat_type="homeRuns"):
             if cats:
                 leaders = cats[0].get("leaders", [])
                 if leaders:
-                    msgs = ["MLB " + cat + " leaders:"]
+                    msgs = ["MLB " + cat + " (" + str(season) + "):"]
                     for i, p in enumerate(leaders, 1):
                         name = p.get("person",{}).get("fullName","?")
                         team = p.get("team",{}).get("abbreviation","")
@@ -897,7 +905,7 @@ def get_mlb_leaders(stat_type="homeRuns"):
             "https://statsapi.mlb.com/api/v1/stats/leaders",
             params={
                 "leaderCategories": cat,
-                "season": 2025,
+                "season": season,
                 "limit": 10,
                 "statGroup": "pitching",
                 "sportId": 1,
@@ -908,7 +916,7 @@ def get_mlb_leaders(stat_type="homeRuns"):
             if cats2:
                 leaders2 = cats2[0].get("leaders", [])
                 if leaders2:
-                    msgs = ["MLB " + cat + " leaders:"]
+                    msgs = ["MLB " + cat + " (" + str(season) + "):"]
                     for i, p in enumerate(leaders2, 1):
                         name = p.get("person",{}).get("fullName","?")
                         team = p.get("team",{}).get("abbreviation","")
@@ -921,46 +929,53 @@ def get_mlb_leaders(stat_type="homeRuns"):
 
 
 def get_nfl_leaders(stat_type="passing"):
-    """NFL stat leaders via ESPN leaders endpoint."""
+    """NFL stat leaders via Pro Football Reference API (no key)."""
+    # NFL season just ended - use 2024 season stats via ESPN
     STAT_MAP = {
-        "passing":"passingYards","passyards":"passingYards",
-        "rushing":"rushingYards","rushyards":"rushingYards",
-        "receiving":"receivingYards","recyards":"receivingYards",
-        "touchdowns":"passingTouchdowns","td":"passingTouchdowns",
-        "sacks":"sacks","interceptions":"interceptions","int":"interceptions",
-        "tackles":"tackles",
+        "passing":"passing","passyards":"passing",
+        "rushing":"rushing","rushyards":"rushing",
+        "receiving":"receiving","recyards":"receiving",
+        "touchdowns":"scoring","td":"scoring",
+        "sacks":"defense","interceptions":"defense","int":"defense",
+        "tackles":"defense","defense":"defense",
     }
-    cat = STAT_MAP.get(stat_type.lower(), stat_type)
+    cat = STAT_MAP.get(stat_type.lower(), "passing")
     try:
-        data = safe_get("https://site.api.espn.com/apis/site/v2/sports/football/nfl/leaders")
-        if not data:
-            return None
-        print("NFL leaders keys:", list(data.keys()), flush=True)
-        categories = data.get("categories", [])
-        for c in categories:
-            print("NFL cat:", c.get("name",""), c.get("displayName",""), flush=True)
-            if cat.lower() in c.get("name","").lower() or cat.lower() in c.get("displayName","").lower():
-                leaders = c.get("leaders",[])
-                msgs = ["NFL " + c.get("displayName",cat) + " leaders:"]
-                for i, l in enumerate(leaders[:10], 1):
-                    aname = l.get("athlete",{}).get("displayName","?")
-                    team  = l.get("team",{}).get("abbreviation","")
-                    val   = l.get("displayValue","?")
-                    msgs.append(str(i) + ". " + aname + " (" + team + "): " + val)
-                return msgs
-        # Return all if specific not found
-        if categories:
-            msgs = ["NFL stat leaders:"]
-            for c in categories[:8]:
-                leaders = c.get("leaders",[])
-                if leaders:
-                    top   = leaders[0]
-                    aname = top.get("athlete",{}).get("displayName","?")
-                    val   = top.get("displayValue","?")
-                    team  = top.get("team",{}).get("abbreviation","")
-                    disp  = c.get("displayName","")
-                    msgs.append(disp + ": " + aname + " (" + team + ") " + val)
-            return msgs
+        # Try ESPN season leaders with year
+        for season in ["2025","2024"]:
+            url = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/leaders?season=" + season
+            data = safe_get(url)
+            print("NFL leaders season", season, "keys:", list(data.keys()) if data else "None", flush=True)
+            if not data:
+                continue
+            categories = data.get("categories", [])
+            print("NFL categories:", [c.get("name","") for c in categories[:5]], flush=True)
+            for c in categories:
+                cname = c.get("name","").lower()
+                cdisp = c.get("displayName","").lower()
+                if cat.lower() in cname or cat.lower() in cdisp or stat_type.lower() in cname:
+                    leaders = c.get("leaders",[])
+                    if leaders:
+                        msgs = ["NFL " + c.get("displayName",cat) + " (" + season + "):"]
+                        for i, l in enumerate(leaders[:10], 1):
+                            aname = l.get("athlete",{}).get("displayName","?")
+                            team  = l.get("team",{}).get("abbreviation","")
+                            val   = l.get("displayValue","?")
+                            msgs.append(str(i) + ". " + aname + " (" + team + "): " + val)
+                        return msgs
+            if categories:
+                msgs = ["NFL leaders (" + season + "):"]
+                for c in categories[:8]:
+                    leaders = c.get("leaders",[])
+                    if leaders:
+                        top   = leaders[0]
+                        aname = top.get("athlete",{}).get("displayName","?")
+                        val   = top.get("displayValue","?")
+                        team  = top.get("team",{}).get("abbreviation","")
+                        disp  = c.get("displayName","")
+                        msgs.append(disp + ": " + aname + " (" + team + ") " + val)
+                if len(msgs) > 1:
+                    return msgs
     except Exception as e:
         print("NFL leaders error:", e, flush=True)
     return None
@@ -1032,14 +1047,25 @@ def get_odds(league, odds_type="championship"):
         if not ODDS_KEY:
             return [league.upper() + " odds: add ODDS_API_KEY to Render env vars."]
         odds_data = safe_get(
-            "https://api.the-odds-api.com/v4/sports/" + sport_key + "/odds",
+            "https://api.the-odds-api.com/v4/sports/" + sport_key + "/events/" + sport_key + "/odds",
             params={
                 "apiKey": ODDS_KEY,
                 "regions": "us",
-                "markets": market_key,
+                "markets": "outrights",
                 "oddsFormat": "american",
             }
         )
+        if not odds_data:
+            odds_data = safe_get(
+                "https://api.the-odds-api.com/v4/sports/" + sport_key + "/odds",
+                params={
+                    "apiKey": ODDS_KEY,
+                    "regions": "us",
+                    "markets": "outrights",
+                    "oddsFormat": "american",
+                }
+            )
+        print("Odds API result type:", type(odds_data), flush=True)
         if odds_data and isinstance(odds_data, list):
             msgs    = [league.upper() + " " + odds_type.title() + " Odds:"]
             seen    = {}
