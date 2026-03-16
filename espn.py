@@ -4,6 +4,7 @@ SMS optimized. EST times.
 """
 
 import requests
+import os
 from datetime import datetime, timezone, timedelta
 import time as _time
 
@@ -38,10 +39,10 @@ def sport_url(league, path=""):
     sport, lg = SPORT_MAP[league]
     return BASE + "/" + sport + "/" + lg + path
 
-def safe_get(endpoint, params=None, timeout_override=None):
+def safe_get(endpoint, params=None, timeout_override=None, headers=None):
     try:
         t = timeout_override if timeout_override else TIMEOUT
-        r = requests.get(endpoint, params=params, timeout=t)
+        r = requests.get(endpoint, params=params, timeout=t, headers=headers or {})
         r.raise_for_status()
         return r.json()
     except Exception:
@@ -325,7 +326,14 @@ def get_player(league, player_name):
     header += " | " + found_team
     msgs = [header]
 
-    # Try one fast stat call only
+    # Try balldontlie for NBA player stats
+    if league == "nba":
+        bdl = get_balldontlie_stats(found_name)
+        if bdl:
+            msgs.extend(bdl)
+            return msgs
+
+    # Try ESPN stat call
     sdata = safe_get(
         BASE + "/" + sport + "/" + lg + "/athletes/" + found_pid + "/statistics/0",
         timeout_override=5
@@ -348,6 +356,7 @@ def get_player(league, player_name):
                 msgs.append(cname + ": " + " ".join(stat_bits))
 
     if len(msgs) == 1:
+        print("STATS: no stats found for pid", found_pid, flush=True)
         # Try balldontlie for NBA
         if league == "nba":
             bdl_msgs = get_balldontlie_stats(found_name)
@@ -365,12 +374,15 @@ def get_player(league, player_name):
 
 
 def get_balldontlie_stats(player_name):
-    """Fetch NBA season stats from balldontlie.io (free, no key needed for v1)."""
+    """Fetch NBA season stats from balldontlie.io (requires free API key)."""
+    BDL_KEY = os.environ.get("BALLDONTLIE_KEY","")
+    if not BDL_KEY:
+        return None
     try:
-        # Search for player
         search = safe_get(
             "https://api.balldontlie.io/v1/players",
-            params={"search": player_name, "per_page": 1}
+            params={"search": player_name, "per_page": 1},
+            headers={"Authorization": BDL_KEY}
         )
         if not search:
             return None
@@ -385,7 +397,8 @@ def get_balldontlie_stats(player_name):
         # Get current season averages
         stats = safe_get(
             "https://api.balldontlie.io/v1/season_averages",
-            params={"player_ids[]": pid, "season": 2024}
+            params={"player_ids[]": pid, "season": 2024},
+            headers={"Authorization": BDL_KEY}
         )
         if not stats:
             return None
@@ -694,9 +707,11 @@ def get_stat_leaders(league, stat_type="points"):
 
     for endpoint in endpoints:
         data = safe_get(endpoint)
+        print("LEADERS endpoint:", endpoint, "keys:", list(data.keys()) if data else "None", flush=True)
         if not data:
             continue
         categories = data.get("categories", [])
+        print("LEADERS categories count:", len(categories), [c.get("name","") for c in categories[:5]], flush=True)
         for cat in categories:
             name = cat.get("name","").lower()
             disp = cat.get("displayName","")
@@ -732,15 +747,29 @@ def get_stat_leaders(league, stat_type="points"):
                     msgs.append(line)
             return msgs
 
-    # NBA fallback via balldontlie
-    if league == "nba":
-        return get_nba_leaders_bdl(stat_type)
+    # Use sport-specific APIs
+    if league == "nhl":
+        result = get_nhl_leaders(stat_type)
+        if result:
+            return result
+    elif league == "mlb":
+        result = get_mlb_leaders(stat_type)
+        if result:
+            return result
+    elif league == "nfl":
+        result = get_nfl_leaders(stat_type)
+        if result:
+            return result
+    elif league == "nba":
+        result = get_nba_leaders_bdl(stat_type)
+        if result:
+            return result
 
-    return [league.upper() + " leaders not available."]
+    return [league.upper() + " " + stat_type + " leaders not available."]
 
 
 def get_nba_leaders_bdl(stat_type):
-    """NBA stat leaders via balldontlie."""
+    """NBA stat leaders via balldontlie.io (requires free API key)."""
     STAT_MAP = {
         "points":"pts","pts":"pts",
         "rebounds":"reb","reb":"reb",
@@ -749,10 +778,14 @@ def get_nba_leaders_bdl(stat_type):
         "blocks":"blk","blk":"blk",
     }
     key = STAT_MAP.get(stat_type.lower(), "pts")
+    BDL_KEY = os.environ.get("BALLDONTLIE_KEY","")
+    if not BDL_KEY:
+        return ["NBA leaders: add BALLDONTLIE_KEY to Render env vars."]
     try:
         data = safe_get(
             "https://api.balldontlie.io/v1/season_averages",
-            params={"season": 2024, "per_page": 100}
+            params={"season": 2024, "per_page": 100},
+            headers={"Authorization": BDL_KEY}
         )
         if not data:
             return None
@@ -772,6 +805,165 @@ def get_nba_leaders_bdl(stat_type):
         return msgs
     except Exception:
         return None
+
+
+def get_nhl_leaders(stat_type="points"):
+    """NHL stat leaders via official NHL API (no key needed)."""
+    STAT_MAP = {
+        "points":"points","pts":"points",
+        "goals":"goals","g":"goals",
+        "assists":"assists","a":"assists",
+        "plusminus":"plusMinus","pm":"plusMinus",
+        "wins":"wins","w":"wins",
+        "gaa":"goalsAgainstAverage",
+        "savepct":"savePctg","sv":"savePctg",
+    }
+    cat = STAT_MAP.get(stat_type.lower(), "points")
+    try:
+        data = safe_get(
+            "https://api-web.nhle.com/v1/skater-stats-leaders/current",
+            params={"categories": cat, "limit": 10}
+        )
+        if data and cat in data:
+            leaders = data[cat]
+            msgs = ["NHL " + cat + " leaders:"]
+            for i, p in enumerate(leaders, 1):
+                fname  = p.get("firstName",{}).get("default","")
+                lname  = p.get("lastName",{}).get("default","")
+                team   = p.get("teamAbbrevAbbrev", p.get("teamAbbrev",{}).get("default",""))
+                val    = p.get("value", p.get(cat,"?"))
+                msgs.append(str(i) + ". " + fname + " " + lname + " (" + str(team) + "): " + str(val))
+            return msgs
+        # Try goalie leaders
+        gdata = safe_get(
+            "https://api-web.nhle.com/v1/goalie-stats-leaders/current",
+            params={"categories": cat, "limit": 10}
+        )
+        if gdata and cat in gdata:
+            leaders = gdata[cat]
+            msgs = ["NHL " + cat + " leaders:"]
+            for i, p in enumerate(leaders, 1):
+                fname = p.get("firstName",{}).get("default","")
+                lname = p.get("lastName",{}).get("default","")
+                team  = p.get("teamAbbrev",{}).get("default","")
+                val   = p.get("value", p.get(cat,"?"))
+                msgs.append(str(i) + ". " + fname + " " + lname + " (" + str(team) + "): " + str(val))
+            return msgs
+    except Exception as e:
+        print("NHL leaders error:", e, flush=True)
+    return None
+
+
+def get_mlb_leaders(stat_type="homeRuns"):
+    """MLB stat leaders via official MLB Stats API (no key needed)."""
+    STAT_MAP = {
+        "hr":"homeRuns","homeruns":"homeRuns","homeRuns":"homeRuns",
+        "avg":"battingAverage","average":"battingAverage",
+        "rbi":"runsBattedIn","rbis":"runsBattedIn",
+        "sb":"stolenBases","stolenbases":"stolenBases",
+        "era":"earnedRunAverage","wins":"wins","w":"wins",
+        "strikeouts":"strikeouts","so":"strikeouts","k":"strikeouts",
+        "saves":"saves","sv":"saves",
+        "hits":"hits","h":"hits",
+        "runs":"runs","r":"runs",
+    }
+    cat = STAT_MAP.get(stat_type.lower(), stat_type)
+    try:
+        # Hitting leaders
+        data = safe_get(
+            "https://statsapi.mlb.com/api/v1/stats/leaders",
+            params={
+                "leaderCategories": cat,
+                "season": 2025,
+                "limit": 10,
+                "statGroup": "hitting",
+                "sportId": 1,
+            }
+        )
+        if data:
+            cats = data.get("leagueLeaders", [])
+            if cats:
+                leaders = cats[0].get("leaders", [])
+                if leaders:
+                    msgs = ["MLB " + cat + " leaders:"]
+                    for i, p in enumerate(leaders, 1):
+                        name = p.get("person",{}).get("fullName","?")
+                        team = p.get("team",{}).get("abbreviation","")
+                        val  = p.get("value","?")
+                        msgs.append(str(i) + ". " + name + " (" + team + "): " + str(val))
+                    return msgs
+        # Try pitching
+        data2 = safe_get(
+            "https://statsapi.mlb.com/api/v1/stats/leaders",
+            params={
+                "leaderCategories": cat,
+                "season": 2025,
+                "limit": 10,
+                "statGroup": "pitching",
+                "sportId": 1,
+            }
+        )
+        if data2:
+            cats2 = data2.get("leagueLeaders", [])
+            if cats2:
+                leaders2 = cats2[0].get("leaders", [])
+                if leaders2:
+                    msgs = ["MLB " + cat + " leaders:"]
+                    for i, p in enumerate(leaders2, 1):
+                        name = p.get("person",{}).get("fullName","?")
+                        team = p.get("team",{}).get("abbreviation","")
+                        val  = p.get("value","?")
+                        msgs.append(str(i) + ". " + name + " (" + team + "): " + str(val))
+                    return msgs
+    except Exception as e:
+        print("MLB leaders error:", e, flush=True)
+    return None
+
+
+def get_nfl_leaders(stat_type="passing"):
+    """NFL stat leaders via ESPN leaders endpoint."""
+    STAT_MAP = {
+        "passing":"passingYards","passyards":"passingYards",
+        "rushing":"rushingYards","rushyards":"rushingYards",
+        "receiving":"receivingYards","recyards":"receivingYards",
+        "touchdowns":"passingTouchdowns","td":"passingTouchdowns",
+        "sacks":"sacks","interceptions":"interceptions","int":"interceptions",
+        "tackles":"tackles",
+    }
+    cat = STAT_MAP.get(stat_type.lower(), stat_type)
+    try:
+        data = safe_get("https://site.api.espn.com/apis/site/v2/sports/football/nfl/leaders")
+        if not data:
+            return None
+        print("NFL leaders keys:", list(data.keys()), flush=True)
+        categories = data.get("categories", [])
+        for c in categories:
+            print("NFL cat:", c.get("name",""), c.get("displayName",""), flush=True)
+            if cat.lower() in c.get("name","").lower() or cat.lower() in c.get("displayName","").lower():
+                leaders = c.get("leaders",[])
+                msgs = ["NFL " + c.get("displayName",cat) + " leaders:"]
+                for i, l in enumerate(leaders[:10], 1):
+                    aname = l.get("athlete",{}).get("displayName","?")
+                    team  = l.get("team",{}).get("abbreviation","")
+                    val   = l.get("displayValue","?")
+                    msgs.append(str(i) + ". " + aname + " (" + team + "): " + val)
+                return msgs
+        # Return all if specific not found
+        if categories:
+            msgs = ["NFL stat leaders:"]
+            for c in categories[:8]:
+                leaders = c.get("leaders",[])
+                if leaders:
+                    top   = leaders[0]
+                    aname = top.get("athlete",{}).get("displayName","?")
+                    val   = top.get("displayValue","?")
+                    team  = top.get("team",{}).get("abbreviation","")
+                    disp  = c.get("displayName","")
+                    msgs.append(disp + ": " + aname + " (" + team + ") " + val)
+            return msgs
+    except Exception as e:
+        print("NFL leaders error:", e, flush=True)
+    return None
 
 
 # -- Championship / futures odds -----------------------------------------------
@@ -794,9 +986,11 @@ def get_odds(league, odds_type="championship"):
     # Try ESPN odds endpoints
     for endpoint in ODDS_ENDPOINTS:
         data = safe_get(endpoint)
+        print("ODDS endpoint:", endpoint, "keys:", list(data.keys()) if data else "None", flush=True)
         if not data:
             continue
         items = data.get("items", data.get("futures", data.get("odds", [])))
+        print("ODDS items count:", len(items) if items else 0, flush=True)
         if not items:
             continue
         msgs = [league.upper() + " " + odds_type.title() + " Odds:"]
@@ -834,10 +1028,13 @@ def get_odds(league, odds_type="championship"):
     market_key = MARKET_KEYS.get(odds_type.lower(), "outrights")
 
     if sport_key:
+        ODDS_KEY = os.environ.get("ODDS_API_KEY","")
+        if not ODDS_KEY:
+            return [league.upper() + " odds: add ODDS_API_KEY to Render env vars."]
         odds_data = safe_get(
             "https://api.the-odds-api.com/v4/sports/" + sport_key + "/odds",
             params={
-                "apiKey": "9d792cf4a73d5c17fa5c4b2c8ff012e7",
+                "apiKey": ODDS_KEY,
                 "regions": "us",
                 "markets": market_key,
                 "oddsFormat": "american",
