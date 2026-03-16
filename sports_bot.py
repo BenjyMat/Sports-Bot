@@ -727,9 +727,10 @@ def handle_message(user_id, data):
                     mapping = {"scores":"league_scores","schedule":"league_schedule","news":"league_news"}
                     lc = mapping.get(cat)
                 if lc:
-                    s["step"]      = "AGAIN"
-                    s["league"]    = league
-                    s["team_name"] = league.upper() + " (All)"
+                    s["step"]        = "AGAIN"
+                    s["league"]      = league
+                    s["team_name"]   = league.upper() + " (All)"
+                    s["league_wide"] = True
                     result = run_fetch(lambda: espn.get_league_data(league, lc))
                     result = result or ["No data available."]
                     send_results(user_id, result, s)
@@ -850,8 +851,9 @@ def handle_message(user_id, data):
             reply(user_id, LEAGUE_CAT_MENU)
             return
         league         = s.get("league")
-        s["step"]      = "AGAIN"
-        s["team_name"] = league.upper() + " (All)"
+        s["step"]        = "AGAIN"
+        s["team_name"]   = league.upper() + " (All)"
+        s["league_wide"] = True
         result = run_fetch(lambda: espn.get_league_data(league, cat))
         result = result or ["Could not load data."]
         send_results(user_id, result, s)
@@ -903,9 +905,10 @@ def handle_message(user_id, data):
         if not team:
             reply(user_id, '"' + text + '" not found.\nType name or number.\nMENU to restart.')
             return
-        s["team_id"]   = team["id"]
-        s["team_name"] = team["name"]
-        s["step"]      = "CATEGORY"
+        s["team_id"]     = team["id"]
+        s["team_name"]   = team["name"]
+        s["league_wide"] = False
+        s["step"]        = "CATEGORY"
         reply(user_id, team["name"] + "\n" + CATEGORY_MENU)
 
     # STEP 3: Category
@@ -932,8 +935,12 @@ def handle_message(user_id, data):
     # STEP 4: After results
     elif step == "AGAIN":
         if tl in ("1","same","same team"):
-            s["step"] = "CATEGORY"
-            reply(user_id, s.get("team_name","") + "\n" + CATEGORY_MENU)
+            if s.get("league_wide"):
+                s["step"] = "LEAGUE_CAT"
+                reply(user_id, LEAGUE_CAT_MENU)
+            else:
+                s["step"] = "CATEGORY"
+                reply(user_id, s.get("team_name","") + "\n" + CATEGORY_MENU)
         elif tl in ("2","new team","team"):
             league = s.get("league","")
             teams  = s.get("teams") or espn.get_teams(league)
