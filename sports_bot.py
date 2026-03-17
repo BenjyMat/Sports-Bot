@@ -73,18 +73,39 @@ LEAGUE_CATS = {
 
 # Common alternate abbreviations ESPN doesn't use
 ABBREV_ALIASES = {
-    "nyk":"NY","knicks":"NY","nyk":"NY",
+    "nyk":"NY","knicks":"NY",
     "gsw":"GS","warriors":"GS",
     "phx":"PHX","suns":"PHX",
     "lac":"LAC","clippers":"LAC",
     "lal":"LAL","lakers":"LAL",
     "sa":"SA","spurs":"SA",
     "no":"NO","pelicans":"NO",
-    "utah":"UTAH",
+    "utah":"UTAH","jazz":"UTAH",
     "mem":"MEM","grizzlies":"MEM",
     "cha":"CHA","hornets":"CHA",
     "bkn":"BKN","nets":"BKN",
-    "wsh":"WSH","wsh":"WSH",
+    "wsh":"WSH","wash":"WSH","commanders":"WSH","nationals":"WSH","wizards":"WSH",
+    "ny":"NY","new york":"NY",
+    "la":"LAL","angeles":"LAL",
+    "chi":"CHI","bulls":"CHI",
+    "bos":"BOS","celtics":"BOS",
+    "mia":"MIA","heat":"MIA",
+    "ind":"IND","pacers":"IND",
+    "mil":"MIL","bucks":"MIL",
+    "det":"DET","pistons":"DET",
+    "tor":"TOR","raptors":"TOR",
+    "okc":"OKC","thunder":"OKC",
+    "min":"MIN","timberwolves":"MIN","wolves":"MIN",
+    "den":"DEN","nuggets":"DEN",
+    "por":"POR","blazers":"POR",
+    "sac":"SAC","kings":"SAC",
+    "hou":"HOU","rockets":"HOU",
+    "dal":"DAL","mavs":"DAL","mavericks":"DAL",
+    "orl":"ORL","magic":"ORL",
+    "atl":"ATL","hawks":"ATL",
+    "cle":"CLE","cavs":"CLE","cavaliers":"CLE",
+    "phi":"PHI","sixers":"PHI",
+    "was":"WSH",
 }
 
 WELCOME = (
@@ -693,8 +714,15 @@ def handle_message(user_id, data):
                     send_results(user_id, result, s)
                     return
 
-                if stat_key or any(w in ("leaders","leader","top","best") for w in words_q):
-                    sk = stat_key or "points"
+                # stat_key: use last stat word found (not overwritten by "leaders")
+                # Re-parse: find stat words only, ignore "leaders/top/best"
+                IGNORE_WORDS = {"leaders","leader","top","best","stats","stat"}
+                real_stat = None
+                for w in words_q:
+                    if w in LEADER_STATS and w not in IGNORE_WORDS:
+                        real_stat = LEADER_STATS[w]
+                if real_stat or any(w in ("leaders","leader","top","best") for w in words_q):
+                    sk = real_stat or "points"
                     result = run_fetch(lambda: espn.get_league_leaders(league, sk))
                     result = result or ["Leaders not available."]
                     s["step"]      = "AGAIN"
